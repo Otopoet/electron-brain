@@ -1,0 +1,63 @@
+{
+  "name": "electron-brain",
+  "version": "1.0.0",
+  "description": "TheBrain-style personal knowledge manager for Mac",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "dist": "npm run build && electron-builder",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@electron-toolkit/tsconfig": "^2.0.0",
+    "@electron-toolkit/utils": "^4.0.0",
+    "@electron/rebuild": "^4.0.3",
+    "@types/node": "^22.0.0",
+    "@vitejs/plugin-react": "^4.0.0",
+    "electron": "^33.0.0",
+    "electron-builder": "^26.8.1",
+    "electron-vite": "^2.3.0",
+    "typescript": "^5.6.0",
+    "vite": "^5.0.0"
+  },
+  "dependencies": {
+    "@tiptap/pm": "^2.10.0",
+    "@tiptap/react": "^2.10.0",
+    "@tiptap/starter-kit": "^2.10.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/d3": "^7.4.3",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@types/uuid": "^10.0.0",
+    "better-sqlite3": "^11.0.0",
+    "d3": "^7.9.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "uuid": "^11.0.0"
+  },
+  "build": {
+    "appId": "com.brain.app",
+    "productName": "Brain",
+    "directories": {
+      "output": "release"
+    },
+    "mac": {
+      "target": [{ "target": "dmg", "arch": ["arm64", "x64"] }],
+      "category": "public.app-category.productivity"
+    },
+    "files": [
+      "out/**/*",
+      "!out/**/*.map",
+      "node_modules/better-sqlite3/build/Release/*.node"
+    ],
+    "asarUnpack": [
+      "node_modules/better-sqlite3/build/Release/*.node"
+    ],
+    "npmRebuild": true
+  }
+}

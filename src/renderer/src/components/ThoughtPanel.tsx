@@ -1,29 +1,38 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
-import type { Neighborhood, Attachment, Thought, Tag, ThoughtType } from '../../../shared/types'
+import type { Neighborhood, Attachment, Thought, Tag, ThoughtType, LinkType, Link } from '../../../shared/types'
 import { FilePreview } from './FilePreview'
+import { buildMentionExtension } from './MentionExtension'
 
 interface Props {
   neighborhood: Neighborhood | null
   onUpdate: (id: string, patch: Partial<Pick<Thought, 'title' | 'notes' | 'color' | 'type_id'>>) => void
   onDeleteThought: (id: string) => void
+  onTogglePin: (id: string) => void
   onAddAttachment: (type: 'file' | 'url', name: string, path: string) => void
   onDeleteAttachment: (id: string) => void
   onPickFile: () => void
   onCreateLink: (sourceId: string, targetId: string, type: 'child' | 'jump') => void
+  onUpdateLink: (id: string, patch: { label?: string; is_one_way?: number; color?: string; width?: number; link_type_id?: string | null }) => void
+  onDeleteLink: (id: string) => void
   onAddTag: (tagId: string) => void
   onRemoveTag: (tagId: string) => void
   onCreateTag: (name: string, color: string) => Promise<Tag>
+  onCreateType: (name: string, color: string, icon?: string) => Promise<ThoughtType>
+  onCreateLinkType: (name: string, color: string, width: number) => Promise<LinkType>
   onNavigate: (id: string) => void
   allThoughts: Thought[]
   allTags: Tag[]
   allTypes: ThoughtType[]
+  allLinkTypes: LinkType[]
   activeId: string | null
 }
 
 const COLORS = ['#4A90E2','#7B68EE','#E24A4A','#4AE28A','#E2B94A','#E24AB5','#4AE2D8','#9E9E9E']
 const TAG_PALETTE = ['#4A90E2','#7B68EE','#E24A4A','#4AE28A','#E2B94A','#E24AB5','#4AE2D8','#888']
+const LINK_COLORS = ['', '#5a7fa0','#f0a500','#7B68EE','#E24A4A','#4AE28A','#E24AB5','#4AE2D8']
+const WIDTH_OPTIONS = [{ label: 'Default', value: 0 }, { label: 'Thin', value: 1 }, { label: 'Normal', value: 1.5 }, { label: 'Thick', value: 3 }]
 
 const btn: React.CSSProperties = {
   background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)',
@@ -31,13 +40,26 @@ const btn: React.CSSProperties = {
 }
 const inp: React.CSSProperties = {
   background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)',
-  borderRadius: 4, padding: '5px 8px', color: '#e8edf5', fontSize: 12, outline: 'none', width: '100%'
+  borderRadius: 4, padding: '5px 8px', color: '#e8edf5', fontSize: 12, outline: 'none', width: '100%', boxSizing: 'border-box' as const
+}
+const sectionLabel: React.CSSProperties = {
+  padding: '8px 16px 4px', fontSize: 10, fontWeight: 600, letterSpacing: '0.08em',
+  color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase' as const, flexShrink: 0, userSelect: 'none' as const
+}
+
+function resolveLink(link: Link, allLinkTypes: LinkType[]) {
+  const lt = allLinkTypes.find(t => t.id === link.link_type_id)
+  return {
+    color: link.color || lt?.color || (link.type === 'child' ? '#5a7fa0' : '#f0a500'),
+    width: link.width || lt?.width || 1.5
+  }
 }
 
 export function ThoughtPanel({
-  neighborhood, onUpdate, onDeleteThought, onAddAttachment, onDeleteAttachment,
-  onPickFile, onCreateLink, onAddTag, onRemoveTag, onCreateTag, onNavigate,
-  allThoughts, allTags, allTypes, activeId
+  neighborhood, onUpdate, onDeleteThought, onTogglePin, onAddAttachment, onDeleteAttachment,
+  onPickFile, onCreateLink, onUpdateLink, onDeleteLink, onAddTag, onRemoveTag,
+  onCreateTag, onCreateType, onCreateLinkType, onNavigate,
+  allThoughts, allTags, allTypes, allLinkTypes, activeId
 }: Props) {
   const [title, setTitle] = useState('')
   const [editingTitle, setEditingTitle] = useState(false)
@@ -47,17 +69,40 @@ export function ThoughtPanel({
   const [showLink, setShowLink] = useState(false)
   const [linkTarget, setLinkTarget] = useState('')
   const [linkType, setLinkType] = useState<'child' | 'jump'>('child')
+  const [linkFormLinkTypeId, setLinkFormLinkTypeId] = useState('')
   const [previewAtt, setPreviewAtt] = useState<Attachment | null>(null)
   const [showTagPicker, setShowTagPicker] = useState(false)
   const [showNewTag, setShowNewTag] = useState(false)
   const [newTagName, setNewTagName] = useState('')
   const [newTagColor, setNewTagColor] = useState(TAG_PALETTE[0])
+  const [showNewType, setShowNewType] = useState(false)
+  const [newTypeName, setNewTypeName] = useState('')
+  const [newTypeColor, setNewTypeColor] = useState(COLORS[0])
+  const [newTypeIcon, setNewTypeIcon] = useState('')
+  const [showNewLinkType, setShowNewLinkType] = useState(false)
+  const [newLinkTypeName, setNewLinkTypeName] = useState('')
+  const [newLinkTypeColor, setNewLinkTypeColor] = useState('#5a7fa0')
+  const [newLinkTypeWidth, setNewLinkTypeWidth] = useState(1.5)
+  const [editingLinkId, setEditingLinkId] = useState<string | null>(null)
   const [showBacklinks, setShowBacklinks] = useState(true)
+  const [showLinksSection, setShowLinksSection] = useState(true)
   const titleRef = useRef<HTMLInputElement>(null)
   const notesTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // Stable ref for allThoughts so mention extension doesn't need recreation
+  const allThoughtsRef = useRef(allThoughts)
+  useEffect(() => { allThoughtsRef.current = allThoughts }, [allThoughts])
+
+  const onNavigateRef = useRef(onNavigate)
+  useEffect(() => { onNavigateRef.current = onNavigate }, [onNavigate])
+
+  const mentionExt = useMemo(
+    () => buildMentionExtension(() => allThoughtsRef.current, (id) => onNavigateRef.current(id)),
+    [] // eslint-disable-line react-hooks/exhaustive-deps
+  )
+
   const editor = useEditor({
-    extensions: [StarterKit],
+    extensions: [StarterKit, mentionExt],
     content: '',
     editorProps: { attributes: { class: 'tiptap-editor' } },
     onUpdate: ({ editor }) => {
@@ -76,6 +121,7 @@ export function ThoughtPanel({
     setShowTagPicker(false)
     setShowNewTag(false)
     setNewTagName('')
+    setEditingLinkId(null)
     if (editor && editor.getHTML() !== neighborhood.thought.notes) {
       editor.commands.setContent(neighborhood.thought.notes || '', false)
     }
@@ -98,6 +144,7 @@ export function ThoughtPanel({
     if (!linkTarget || !activeId) return
     onCreateLink(activeId, linkTarget, linkType)
     setLinkTarget(''); setShowLink(false)
+    setLinkFormLinkTypeId('')
   }, [linkTarget, linkType, activeId, onCreateLink])
 
   const handleCreateTag = useCallback(() => {
@@ -108,15 +155,40 @@ export function ThoughtPanel({
     })
   }, [newTagName, newTagColor, onCreateTag, onAddTag])
 
+  const handleCreateType = useCallback(() => {
+    if (!newTypeName.trim()) return
+    onCreateType(newTypeName.trim(), newTypeColor, newTypeIcon.trim() || undefined).then(() => {
+      setNewTypeName(''); setNewTypeIcon(''); setShowNewType(false)
+    })
+  }, [newTypeName, newTypeColor, newTypeIcon, onCreateType])
+
+  const handleCreateLinkType = useCallback(() => {
+    if (!newLinkTypeName.trim()) return
+    onCreateLinkType(newLinkTypeName.trim(), newLinkTypeColor, newLinkTypeWidth).then(lt => {
+      setNewLinkTypeName(''); setShowNewLinkType(false)
+      setLinkFormLinkTypeId(lt.id)
+    })
+  }, [newLinkTypeName, newLinkTypeColor, newLinkTypeWidth, onCreateLinkType])
+
+  // Click delegation for mention chips in editor
+  const handleEditorClick = useCallback((e: React.MouseEvent) => {
+    const target = e.target as HTMLElement
+    if (target.classList.contains('thought-mention')) {
+      const id = target.getAttribute('data-id')
+      if (id) onNavigate(id)
+    }
+  }, [onNavigate])
+
   if (!neighborhood) return (
     <div style={{ width: 320, borderLeft: '1px solid rgba(255,255,255,0.07)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.2)', fontSize: 13 }}>
       Select a thought
     </div>
   )
 
-  const { thought, attachments, tags, backlinks } = neighborhood
+  const { thought, attachments, tags, backlinks, links } = neighborhood
   const appliedTagIds = new Set((tags ?? []).map(t => t.id))
   const availableTags = allTags.filter(t => !appliedTagIds.has(t.id))
+  const activeType = allTypes.find(t => t.id === thought.type_id)
 
   return (
     <div style={{ width: 320, minWidth: 280, display: 'flex', flexDirection: 'column', borderLeft: '1px solid rgba(255,255,255,0.07)', background: '#141c26', overflow: 'hidden' }}>
@@ -125,32 +197,78 @@ export function ThoughtPanel({
       <div style={{ padding: '14px 16px 10px', borderBottom: '1px solid rgba(255,255,255,0.07)', flexShrink: 0 }}>
 
         {/* Color swatches */}
-        <div style={{ display: 'flex', gap: 5, marginBottom: 8 }}>
+        <div style={{ display: 'flex', gap: 5, marginBottom: 8, alignItems: 'center' }}>
           {COLORS.map(c => (
             <div key={c} onClick={() => onUpdate(thought.id, { color: c })}
               style={{ width: 16, height: 16, borderRadius: '50%', background: c, cursor: 'pointer', border: thought.color === c ? '2px solid #fff' : '2px solid transparent' }} />
           ))}
+          {/* Pin button */}
+          <button
+            onClick={() => onTogglePin(thought.id)}
+            title={thought.is_pinned ? 'Unpin' : 'Pin'}
+            style={{
+              marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer',
+              fontSize: 14, opacity: thought.is_pinned ? 1 : 0.35, padding: '2px 4px',
+              transition: 'opacity 0.15s'
+            }}
+            onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
+            onMouseLeave={e => (e.currentTarget.style.opacity = thought.is_pinned ? '1' : '0.35')}
+          >
+            📌
+          </button>
         </div>
 
         {/* Type selector */}
         <div style={{ marginBottom: 8 }}>
-          <select
-            value={thought.type_id ?? ''}
-            onChange={e => {
-              const typeId = e.target.value || null
-              const type = allTypes.find(t => t.id === typeId)
-              onUpdate(thought.id, { type_id: typeId, ...(type ? { color: type.color } : {}) })
-            }}
-            style={{ ...inp, fontSize: 11, padding: '3px 6px' }}
-          >
-            <option value="">No type</option>
-            {allTypes.map(t => (
-              <option key={t.id} value={t.id}>{t.name}</option>
-            ))}
-          </select>
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+            <select
+              value={thought.type_id ?? ''}
+              onChange={e => {
+                const typeId = e.target.value || null
+                const type = allTypes.find(t => t.id === typeId)
+                onUpdate(thought.id, { type_id: typeId, ...(type ? { color: type.color } : {}) })
+              }}
+              style={{ ...inp, fontSize: 11, padding: '3px 6px', flex: 1 }}
+            >
+              <option value="">No type</option>
+              {allTypes.map(t => (
+                <option key={t.id} value={t.id}>{t.icon ? `${t.icon} ${t.name}` : t.name}</option>
+              ))}
+            </select>
+            <button
+              onClick={() => setShowNewType(s => !s)}
+              title="Create new type"
+              style={{ ...btn, padding: '3px 7px', fontSize: 13, flexShrink: 0 }}
+            >
+              +
+            </button>
+          </div>
+
+          {/* Type creation form */}
+          {showNewType && (
+            <div style={{ marginTop: 6, background: 'rgba(0,0,0,0.25)', borderRadius: 6, padding: '8px 10px', border: '1px solid rgba(255,255,255,0.1)', display: 'flex', flexDirection: 'column', gap: 5 }}>
+              <div style={{ display: 'flex', gap: 5 }}>
+                <input placeholder="Type name…" value={newTypeName} onChange={e => setNewTypeName(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleCreateType()}
+                  autoFocus style={{ ...inp, fontSize: 11, flex: 1 }} />
+                <input placeholder="🎭" value={newTypeIcon} onChange={e => setNewTypeIcon(e.target.value)}
+                  style={{ ...inp, fontSize: 13, width: 44, padding: '5px 6px', textAlign: 'center' }} />
+              </div>
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {COLORS.map(c => (
+                  <div key={c} onClick={() => setNewTypeColor(c)}
+                    style={{ width: 14, height: 14, borderRadius: '50%', background: c, cursor: 'pointer', border: newTypeColor === c ? '2px solid #fff' : '2px solid transparent' }} />
+                ))}
+              </div>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <button onClick={handleCreateType} style={{ ...btn, background: 'rgba(74,144,226,0.3)', fontSize: 10 }}>Create</button>
+                <button onClick={() => { setShowNewType(false); setNewTypeName(''); setNewTypeIcon('') }} style={{ ...btn, fontSize: 10 }}>Cancel</button>
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* Title */}
+        {/* Title + type icon */}
         {editingTitle ? (
           <input ref={titleRef} value={title} onChange={e => setTitle(e.target.value)}
             onBlur={saveTitle}
@@ -159,10 +277,11 @@ export function ThoughtPanel({
               if (e.key === 'Escape') { setTitle(thought.title); setEditingTitle(false) }
             }}
             autoFocus
-            style={{ width: '100%', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(74,144,226,0.6)', borderRadius: 6, padding: '6px 8px', color: '#fff', fontSize: 16, fontWeight: 600, outline: 'none' }} />
+            style={{ width: '100%', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(74,144,226,0.6)', borderRadius: 6, padding: '6px 8px', color: '#fff', fontSize: 16, fontWeight: 600, outline: 'none', boxSizing: 'border-box' }} />
         ) : (
           <div onClick={() => setEditingTitle(true)}
-            style={{ fontSize: 16, fontWeight: 600, color: '#e8edf5', cursor: 'text', padding: '4px 0', lineHeight: 1.3, wordBreak: 'break-word' }}>
+            style={{ fontSize: 16, fontWeight: 600, color: '#e8edf5', cursor: 'text', padding: '4px 0', lineHeight: 1.3, wordBreak: 'break-word', display: 'flex', alignItems: 'baseline', gap: 6 }}>
+            {activeType?.icon && <span style={{ fontSize: 18 }}>{activeType.icon}</span>}
             {thought.title}
           </div>
         )}
@@ -231,16 +350,165 @@ export function ThoughtPanel({
       </div>
 
       {/* ── Notes ──────────────────────────────────────────────────────── */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
-        <div style={{ padding: '8px 16px 4px', fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', flexShrink: 0 }}>Notes</div>
-        <div style={{ flex: 1, overflow: 'auto', padding: '0 10px 10px' }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', borderBottom: '1px solid rgba(255,255,255,0.07)', minHeight: 80 }}>
+        <div style={sectionLabel}>Notes</div>
+        <div style={{ flex: 1, overflow: 'auto', padding: '0 10px 10px' }} onClick={handleEditorClick}>
           <EditorContent editor={editor} />
         </div>
       </div>
 
+      {/* ── Links ──────────────────────────────────────────────────────── */}
+      <div style={{ flexShrink: 0, borderBottom: '1px solid rgba(255,255,255,0.07)', maxHeight: showLinksSection ? 280 : 'auto' }}>
+        <div onClick={() => setShowLinksSection(s => !s)}
+          style={{ ...sectionLabel, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
+          <span>{showLinksSection ? '▾' : '▸'}</span>
+          <span>Links ({(links ?? []).length})</span>
+        </div>
+
+        {showLinksSection && (
+          <div style={{ overflowY: 'auto', maxHeight: 200 }}>
+            {(links ?? []).map(link => {
+              const otherId = link.source_id === activeId ? link.target_id : link.source_id
+              const other = allThoughts.find(t => t.id === otherId)
+              if (!other) return null
+              const isSource = link.source_id === activeId
+              const dirIcon = link.type === 'jump' ? '⟷' : (isSource ? '→' : '←')
+              const { color: lc } = resolveLink(link, allLinkTypes)
+              const lt = allLinkTypes.find(t => t.id === link.link_type_id)
+              const isEditing = editingLinkId === link.id
+
+              return (
+                <div key={link.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 16px 5px 12px' }}>
+                    <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', flexShrink: 0 }}>{dirIcon}</span>
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: other.color, flexShrink: 0 }} />
+                    <span onClick={() => onNavigate(other.id)}
+                      style={{ flex: 1, fontSize: 12, color: '#a8c8f0', cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {other.title}
+                    </span>
+                    {lt && <span style={{ fontSize: 9, color: lt.color, flexShrink: 0, opacity: 0.8 }}>{lt.name}</span>}
+                    <div style={{ width: 10, height: 10, borderRadius: '50%', background: lc, flexShrink: 0, cursor: 'pointer' }}
+                      onClick={() => setEditingLinkId(isEditing ? null : link.id)} title="Edit link style" />
+                  </div>
+
+                  {/* Link edit popover */}
+                  {isEditing && (
+                    <div style={{ margin: '0 12px 8px', background: 'rgba(0,0,0,0.3)', borderRadius: 6, padding: '8px 10px', border: '1px solid rgba(255,255,255,0.1)' }}>
+                      {/* Color */}
+                      <div style={{ marginBottom: 6 }}>
+                        <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)', marginBottom: 4 }}>COLOR</div>
+                        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                          {LINK_COLORS.map((c, ci) => (
+                            <div key={ci} onClick={() => onUpdateLink(link.id, { color: c })}
+                              title={c || 'Default'}
+                              style={{ width: 14, height: 14, borderRadius: '50%', background: c || '#444', cursor: 'pointer', border: link.color === c ? '2px solid #fff' : '2px solid transparent', outline: c === '' ? '1px dashed rgba(255,255,255,0.3)' : 'none' }} />
+                          ))}
+                        </div>
+                      </div>
+                      {/* Width */}
+                      <div style={{ marginBottom: 6 }}>
+                        <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)', marginBottom: 4 }}>WIDTH</div>
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          {WIDTH_OPTIONS.map(w => (
+                            <button key={w.value} onClick={() => onUpdateLink(link.id, { width: w.value })}
+                              style={{ ...btn, fontSize: 9, padding: '2px 5px', background: link.width === w.value ? 'rgba(74,144,226,0.35)' : 'rgba(255,255,255,0.06)' }}>
+                              {w.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      {/* Link type */}
+                      <div style={{ marginBottom: 6 }}>
+                        <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)', marginBottom: 4 }}>LINK TYPE</div>
+                        <select value={link.link_type_id ?? ''} onChange={e => onUpdateLink(link.id, { link_type_id: e.target.value || null })}
+                          style={{ ...inp, fontSize: 10, padding: '3px 5px' }}>
+                          <option value="">None</option>
+                          {allLinkTypes.map(lt => <option key={lt.id} value={lt.id}>{lt.name}</option>)}
+                        </select>
+                      </div>
+                      {/* Label */}
+                      <div style={{ marginBottom: 6 }}>
+                        <input placeholder="Link label…" defaultValue={link.label}
+                          onBlur={e => onUpdateLink(link.id, { label: e.target.value })}
+                          onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+                          style={{ ...inp, fontSize: 10 }} />
+                      </div>
+                      <button onClick={() => { if (window.confirm('Delete this link?')) { onDeleteLink(link.id); setEditingLinkId(null) } }}
+                        style={{ ...btn, fontSize: 9, color: 'rgba(226,74,74,0.7)', borderColor: 'rgba(226,74,74,0.3)' }}>
+                        Delete link
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {/* Link creation */}
+        <div style={{ display: 'flex', gap: 6, padding: '6px 16px 4px', flexWrap: 'wrap' }}>
+          <button onClick={() => setShowLink(!showLink)} style={btn}>+ Link</button>
+        </div>
+
+        {showLink && (
+          <div style={{ padding: '4px 16px 8px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <select value={linkTarget} onChange={e => setLinkTarget(e.target.value)} style={inp}>
+              <option value="">Select thought…</option>
+              {allThoughts.filter(t => t.id !== activeId).map(t => (
+                <option key={t.id} value={t.id}>{t.title}</option>
+              ))}
+            </select>
+            <select value={linkType} onChange={e => setLinkType(e.target.value as 'child' | 'jump')} style={inp}>
+              <option value="child">Child</option>
+              <option value="jump">Jump</option>
+            </select>
+            {/* Link type selector */}
+            <div style={{ display: 'flex', gap: 4 }}>
+              <select value={linkFormLinkTypeId} onChange={e => setLinkFormLinkTypeId(e.target.value)} style={{ ...inp, flex: 1 }}>
+                <option value="">No link type</option>
+                {allLinkTypes.map(lt => <option key={lt.id} value={lt.id}>{lt.name}</option>)}
+              </select>
+              <button onClick={() => setShowNewLinkType(s => !s)} title="Create link type" style={{ ...btn, padding: '3px 7px', fontSize: 13, flexShrink: 0 }}>+</button>
+            </div>
+
+            {/* New link type form */}
+            {showNewLinkType && (
+              <div style={{ background: 'rgba(0,0,0,0.2)', borderRadius: 5, padding: '7px 8px', border: '1px solid rgba(255,255,255,0.1)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <input placeholder="Type name (e.g. Inspired by)…" value={newLinkTypeName} onChange={e => setNewLinkTypeName(e.target.value)}
+                  autoFocus style={{ ...inp, fontSize: 11 }} />
+                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                  {LINK_COLORS.filter(Boolean).map(c => (
+                    <div key={c} onClick={() => setNewLinkTypeColor(c)}
+                      style={{ width: 14, height: 14, borderRadius: '50%', background: c, cursor: 'pointer', border: newLinkTypeColor === c ? '2px solid #fff' : '2px solid transparent' }} />
+                  ))}
+                </div>
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }}>Width:</span>
+                  {WIDTH_OPTIONS.filter(w => w.value > 0).map(w => (
+                    <button key={w.value} onClick={() => setNewLinkTypeWidth(w.value)}
+                      style={{ ...btn, fontSize: 9, padding: '2px 5px', background: newLinkTypeWidth === w.value ? 'rgba(74,144,226,0.35)' : 'rgba(255,255,255,0.06)' }}>
+                      {w.label}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <button onClick={handleCreateLinkType} style={{ ...btn, background: 'rgba(74,144,226,0.3)', fontSize: 10 }}>Create</button>
+                  <button onClick={() => { setShowNewLinkType(false); setNewLinkTypeName('') }} style={{ ...btn, fontSize: 10 }}>Cancel</button>
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button onClick={linkThought} style={{ ...btn, background: 'rgba(74,144,226,0.3)' }}>Link</button>
+              <button onClick={() => setShowLink(false)} style={btn}>Cancel</button>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* ── Attachments ────────────────────────────────────────────────── */}
-      <div style={{ flexShrink: 0, maxHeight: 220, overflowY: 'auto' }}>
-        <div style={{ padding: '8px 16px 4px', fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase' }}>Attachments</div>
+      <div style={{ flexShrink: 0, maxHeight: 220, overflowY: 'auto', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+        <div style={sectionLabel}>Attachments</div>
         {attachments.map(att => (
           <div key={att.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px 4px 16px', borderRadius: 4, margin: '2px 8px', background: previewAtt?.id === att.id ? 'rgba(74,144,226,0.15)' : 'transparent' }}>
             <span style={{ fontSize: 13 }}>{att.type === 'url' ? '🔗' : '📎'}</span>
@@ -258,7 +526,6 @@ export function ThoughtPanel({
         <div style={{ display: 'flex', gap: 6, padding: '6px 16px 4px', flexWrap: 'wrap' }}>
           <button onClick={onPickFile} style={btn}>+ File</button>
           <button onClick={() => setShowUrl(!showUrl)} style={btn}>+ URL</button>
-          <button onClick={() => setShowLink(!showLink)} style={btn}>+ Link</button>
         </div>
 
         {showUrl && (
@@ -272,32 +539,13 @@ export function ThoughtPanel({
             </div>
           </div>
         )}
-
-        {showLink && (
-          <div style={{ padding: '4px 16px 8px', display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <select value={linkTarget} onChange={e => setLinkTarget(e.target.value)} style={inp}>
-              <option value="">Select thought…</option>
-              {allThoughts.filter(t => t.id !== activeId).map(t => (
-                <option key={t.id} value={t.id}>{t.title}</option>
-              ))}
-            </select>
-            <select value={linkType} onChange={e => setLinkType(e.target.value as 'child' | 'jump')} style={inp}>
-              <option value="child">Child</option>
-              <option value="jump">Jump</option>
-            </select>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <button onClick={linkThought} style={{ ...btn, background: 'rgba(74,144,226,0.3)' }}>Link</button>
-              <button onClick={() => setShowLink(false)} style={btn}>Cancel</button>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* ── Backlinks / Mentions ───────────────────────────────────────── */}
       {(backlinks ?? []).length > 0 && (
         <div style={{ flexShrink: 0, borderTop: '1px solid rgba(255,255,255,0.07)' }}>
           <div onClick={() => setShowBacklinks(!showBacklinks)}
-            style={{ padding: '7px 16px 6px', fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, userSelect: 'none' }}>
+            style={{ ...sectionLabel, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
             <span>{showBacklinks ? '▾' : '▸'}</span>
             <span>Mentions ({(backlinks ?? []).length})</span>
           </div>

@@ -4,6 +4,8 @@ import { Plex } from './components/Plex'
 import { ThoughtPanel } from './components/ThoughtPanel'
 import { SearchBar } from './components/SearchBar'
 import { NewThoughtModal } from './components/NewThoughtModal'
+import { PastThoughts } from './components/PastThoughts'
+import { PinsBar } from './components/PinsBar'
 import type { NewThoughtLinkAs } from './components/NewThoughtModal'
 
 export function App() {
@@ -51,6 +53,7 @@ export function App() {
 
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: '#0d1117', color: '#e8edf5', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', overflow: 'hidden', userSelect: 'none' }}>
+
       {/* Toolbar */}
       <div style={{ height: 52, display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px 0 80px', borderBottom: '1px solid rgba(255,255,255,0.07)', background: '#10151e', flexShrink: 0 }}>
         <SearchBar
@@ -61,7 +64,6 @@ export function App() {
           inputRef={searchRef as React.RefObject<HTMLInputElement>}
         />
 
-        {/* Index progress pill — shown while indexing, disappears when complete */}
         {showIndexPill && indexStatus.total > 0 && (
           <div style={{
             fontSize: 10, color: 'rgba(123,104,238,0.75)', background: 'rgba(123,104,238,0.12)',
@@ -78,29 +80,56 @@ export function App() {
         </button>
       </div>
 
+      {/* Pins bar — shown when ≥1 thought is pinned */}
+      <PinsBar
+        pinnedThoughts={brain.pinnedThoughts}
+        activeId={brain.activeId}
+        onNavigate={brain.navigate}
+        onUnpin={brain.togglePin}
+      />
+
       {/* Main */}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+
+        {/* Past Thoughts history panel */}
+        <PastThoughts
+          history={brain.history}
+          allThoughts={brain.allThoughts}
+          activeId={brain.activeId}
+          onNavigate={brain.navigate}
+        />
+
         <Plex
           neighborhood={brain.neighborhood}
           activeId={brain.activeId}
+          allTypes={brain.allTypes}
+          allLinkTypes={brain.allLinkTypes}
           onNavigate={brain.navigate}
           onCreateChild={() => setShowNewModal(true)}
+          onCreateLink={brain.createLink}
         />
+
         <ThoughtPanel
           neighborhood={brain.neighborhood}
           onUpdate={brain.updateThought}
           onDeleteThought={brain.deleteThought}
+          onTogglePin={brain.togglePin}
           onAddAttachment={(type, name, path) => brain.addAttachment(type, name, path)}
           onDeleteAttachment={brain.deleteAttachment}
           onPickFile={brain.pickAndAttachFile}
           onCreateLink={brain.createLink}
+          onUpdateLink={brain.updateLink}
+          onDeleteLink={brain.deleteLink}
           onAddTag={brain.addTagToThought}
           onRemoveTag={brain.removeTagFromThought}
           onCreateTag={brain.createTag}
+          onCreateType={brain.createType}
+          onCreateLinkType={brain.createLinkType}
           onNavigate={brain.navigate}
           allThoughts={brain.allThoughts}
           allTags={brain.allTags}
           allTypes={brain.allTypes}
+          allLinkTypes={brain.allLinkTypes}
           activeId={brain.activeId}
         />
       </div>

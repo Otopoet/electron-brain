@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import { app } from 'electron'
 import path from 'path'
 import { v4 as uuidv4 } from 'uuid'
-import type { Thought, Link, Attachment, Neighborhood, Tag, ThoughtType, ThoughtWithScore } from '../shared/types'
+import type { Thought, Link, Attachment, Neighborhood, Tag, ThoughtType, LinkType, ThoughtWithScore } from '../shared/types'
 
 let db: Database.Database
 
@@ -23,6 +23,7 @@ function createSchema(): void {
       notes TEXT DEFAULT '',
       color TEXT DEFAULT '#4A90E2',
       type_id TEXT DEFAULT NULL,
+      is_pinned INTEGER DEFAULT 0,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -34,6 +35,9 @@ function createSchema(): void {
       type TEXT NOT NULL DEFAULT 'child',
       label TEXT DEFAULT '',
       is_one_way INTEGER DEFAULT 0,
+      color TEXT DEFAULT '',
+      width REAL DEFAULT 0,
+      link_type_id TEXT DEFAULT NULL,
       created_at INTEGER NOT NULL,
       FOREIGN KEY(source_id) REFERENCES thoughts(id) ON DELETE CASCADE,
       FOREIGN KEY(target_id) REFERENCES thoughts(id) ON DELETE CASCADE
@@ -68,7 +72,16 @@ function createSchema(): void {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL UNIQUE,
       color TEXT DEFAULT '#4A90E2',
+      icon TEXT DEFAULT '',
       super_type_id TEXT DEFAULT NULL,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS link_types (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      color TEXT DEFAULT '#5a7fa0',
+      width REAL DEFAULT 1.5,
       created_at INTEGER NOT NULL
     );
 
@@ -98,18 +111,25 @@ function createSchema(): void {
 function runMigrations(): void {
   const cols = (table: string) =>
     (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(r => r.name)
-  if (!cols('thoughts').includes('type_id'))  db.exec(`ALTER TABLE thoughts ADD COLUMN type_id TEXT DEFAULT NULL`)
-  if (!cols('links').includes('label'))       db.exec(`ALTER TABLE links ADD COLUMN label TEXT DEFAULT ''`)
-  if (!cols('links').includes('is_one_way'))  db.exec(`ALTER TABLE links ADD COLUMN is_one_way INTEGER DEFAULT 0`)
+  // v1.1
+  if (!cols('thoughts').includes('type_id'))          db.exec(`ALTER TABLE thoughts ADD COLUMN type_id TEXT DEFAULT NULL`)
+  if (!cols('links').includes('label'))               db.exec(`ALTER TABLE links ADD COLUMN label TEXT DEFAULT ''`)
+  if (!cols('links').includes('is_one_way'))          db.exec(`ALTER TABLE links ADD COLUMN is_one_way INTEGER DEFAULT 0`)
+  // v1.3
+  if (!cols('thoughts').includes('is_pinned'))        db.exec(`ALTER TABLE thoughts ADD COLUMN is_pinned INTEGER DEFAULT 0`)
+  if (!cols('thought_types').includes('icon'))        db.exec(`ALTER TABLE thought_types ADD COLUMN icon TEXT DEFAULT ''`)
+  if (!cols('links').includes('color'))               db.exec(`ALTER TABLE links ADD COLUMN color TEXT DEFAULT ''`)
+  if (!cols('links').includes('width'))               db.exec(`ALTER TABLE links ADD COLUMN width REAL DEFAULT 0`)
+  if (!cols('links').includes('link_type_id'))        db.exec(`ALTER TABLE links ADD COLUMN link_type_id TEXT DEFAULT NULL`)
 }
 
 // ── Thoughts ──────────────────────────────────────────────────────────────────
 
 export function dbCreateThought(title: string, color?: string): Thought {
   const now = Date.now()
-  const t: Thought = { id: uuidv4(), title, notes: '', color: color ?? '#4A90E2', type_id: null, created_at: now, updated_at: now }
-  db.prepare('INSERT INTO thoughts (id,title,notes,color,type_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?)')
-    .run(t.id, t.title, t.notes, t.color, t.type_id, t.created_at, t.updated_at)
+  const t: Thought = { id: uuidv4(), title, notes: '', color: color ?? '#4A90E2', type_id: null, is_pinned: 0, created_at: now, updated_at: now }
+  db.prepare('INSERT INTO thoughts (id,title,notes,color,type_id,is_pinned,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)')
+    .run(t.id, t.title, t.notes, t.color, t.type_id, t.is_pinned, t.created_at, t.updated_at)
   return t
 }
 
@@ -135,6 +155,18 @@ export function dbSearchThoughts(query: string): Thought[] {
   return db.prepare(
     `SELECT t.* FROM thoughts t JOIN thoughts_fts fts ON t.rowid = fts.rowid WHERE thoughts_fts MATCH ? ORDER BY rank`
   ).all(esc + '*') as Thought[]
+}
+
+export function dbTogglePin(id: string): Thought {
+  const t = dbGetThought(id)
+  if (!t) throw new Error(`Thought ${id} not found`)
+  const newPin = t.is_pinned ? 0 : 1
+  db.prepare('UPDATE thoughts SET is_pinned = ?, updated_at = ? WHERE id = ?').run(newPin, Date.now(), id)
+  return { ...t, is_pinned: newPin }
+}
+
+export function dbGetPinnedThoughts(): Thought[] {
+  return db.prepare('SELECT * FROM thoughts WHERE is_pinned = 1 ORDER BY updated_at DESC').all() as Thought[]
 }
 
 // ── Neighborhood ──────────────────────────────────────────────────────────────
@@ -195,14 +227,20 @@ export function dbGetNeighborhood(id: string): Neighborhood {
 
 // ── Links ─────────────────────────────────────────────────────────────────────
 
-export function dbCreateLink(sourceId: string, targetId: string, type: 'child' | 'jump', label = '', isOneWay = 0): Link {
-  const link: Link = { id: uuidv4(), source_id: sourceId, target_id: targetId, type, label, is_one_way: isOneWay, created_at: Date.now() }
-  db.prepare('INSERT INTO links (id,source_id,target_id,type,label,is_one_way,created_at) VALUES (?,?,?,?,?,?,?)')
-    .run(link.id, link.source_id, link.target_id, link.type, link.label, link.is_one_way, link.created_at)
+export function dbCreateLink(
+  sourceId: string, targetId: string, type: 'child' | 'jump',
+  label = '', isOneWay = 0, color = '', width = 0, linkTypeId: string | null = null
+): Link {
+  const link: Link = {
+    id: uuidv4(), source_id: sourceId, target_id: targetId, type,
+    label, is_one_way: isOneWay, color, width, link_type_id: linkTypeId, created_at: Date.now()
+  }
+  db.prepare('INSERT INTO links (id,source_id,target_id,type,label,is_one_way,color,width,link_type_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
+    .run(link.id, link.source_id, link.target_id, link.type, link.label, link.is_one_way, link.color, link.width, link.link_type_id, link.created_at)
   return link
 }
 
-export function dbUpdateLink(id: string, patch: { label?: string; is_one_way?: number }): void {
+export function dbUpdateLink(id: string, patch: { label?: string; is_one_way?: number; color?: string; width?: number; link_type_id?: string | null }): void {
   const fields = Object.entries(patch).map(([k]) => `${k} = ?`).join(', ')
   db.prepare(`UPDATE links SET ${fields} WHERE id = ?`).run(...Object.values(patch), id)
 }
@@ -250,14 +288,30 @@ export function dbRemoveTagFromThought(thoughtId: string, tagId: string): void {
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export function dbCreateType(name: string, color: string): ThoughtType {
-  const t: ThoughtType = { id: uuidv4(), name, color, super_type_id: null, created_at: Date.now() }
-  db.prepare('INSERT INTO thought_types (id,name,color,super_type_id,created_at) VALUES (?,?,?,?,?)').run(t.id, t.name, t.color, t.super_type_id, t.created_at)
+export function dbCreateType(name: string, color: string, icon = ''): ThoughtType {
+  const t: ThoughtType = { id: uuidv4(), name, color, icon, super_type_id: null, created_at: Date.now() }
+  db.prepare('INSERT INTO thought_types (id,name,color,icon,super_type_id,created_at) VALUES (?,?,?,?,?,?)').run(t.id, t.name, t.color, t.icon, t.super_type_id, t.created_at)
   return t
 }
 
 export function dbGetAllTypes(): ThoughtType[] {
   return db.prepare('SELECT * FROM thought_types ORDER BY name').all() as ThoughtType[]
+}
+
+// ── Link Types ────────────────────────────────────────────────────────────────
+
+export function dbCreateLinkType(name: string, color: string, width: number): LinkType {
+  const lt: LinkType = { id: uuidv4(), name, color, width, created_at: Date.now() }
+  db.prepare('INSERT INTO link_types (id,name,color,width,created_at) VALUES (?,?,?,?,?)').run(lt.id, lt.name, lt.color, lt.width, lt.created_at)
+  return lt
+}
+
+export function dbGetAllLinkTypes(): LinkType[] {
+  return db.prepare('SELECT * FROM link_types ORDER BY name').all() as LinkType[]
+}
+
+export function dbDeleteLinkType(id: string): void {
+  db.prepare('DELETE FROM link_types WHERE id = ?').run(id)
 }
 
 // ── Embeddings ─────────────────────────────────────────────────────────────────

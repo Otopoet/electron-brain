@@ -9,6 +9,8 @@ import {
   dbAddAttachment, dbDeleteAttachment,
   dbCreateTag, dbGetAllTags, dbAddTagToThought, dbRemoveTagFromThought,
   dbCreateType, dbGetAllTypes,
+  dbTogglePin, dbGetPinnedThoughts,
+  dbCreateLinkType, dbGetAllLinkTypes, dbDeleteLinkType,
   dbGetIndexStatus
 } from './database'
 import { queueThought, semanticSearch, getStatus } from './embeddings'
@@ -30,6 +32,10 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC.GET_NEIGHBORHOOD, (_, id: string) => dbGetNeighborhood(id))
   ipcMain.handle(IPC.SEARCH_THOUGHTS, (_, query: string) => dbSearchThoughts(query))
 
+  // Pin
+  ipcMain.handle(IPC.TOGGLE_PIN_THOUGHT, (_, id: string) => dbTogglePin(id))
+  ipcMain.handle(IPC.GET_PINNED_THOUGHTS, () => dbGetPinnedThoughts())
+
   // Semantic search
   ipcMain.handle(IPC.SEMANTIC_SEARCH, async (_, query: string, topK?: number) => {
     return semanticSearch(query, topK)
@@ -40,11 +46,16 @@ export function registerIpcHandlers(): void {
   })
 
   // Links
-  ipcMain.handle(IPC.CREATE_LINK, (_, sourceId: string, targetId: string, type: 'child' | 'jump', label?: string, isOneWay?: number) =>
-    dbCreateLink(sourceId, targetId, type, label, isOneWay))
-  ipcMain.handle(IPC.UPDATE_LINK, (_, id: string, patch: { label?: string; is_one_way?: number }) => dbUpdateLink(id, patch))
+  ipcMain.handle(IPC.CREATE_LINK, (_, sourceId: string, targetId: string, type: 'child' | 'jump', label?: string, isOneWay?: number, color?: string, width?: number, linkTypeId?: string) =>
+    dbCreateLink(sourceId, targetId, type, label, isOneWay, color, width, linkTypeId ?? null))
+  ipcMain.handle(IPC.UPDATE_LINK, (_, id: string, patch: { label?: string; is_one_way?: number; color?: string; width?: number; link_type_id?: string | null }) => dbUpdateLink(id, patch))
   ipcMain.handle(IPC.DELETE_LINK, (_, id: string) => dbDeleteLink(id))
   ipcMain.handle(IPC.GET_ALL_LINKS, () => dbGetAllLinks())
+
+  // Link types
+  ipcMain.handle(IPC.CREATE_LINK_TYPE, (_, name: string, color: string, width: number) => dbCreateLinkType(name, color, width))
+  ipcMain.handle(IPC.GET_ALL_LINK_TYPES, () => dbGetAllLinkTypes())
+  ipcMain.handle(IPC.DELETE_LINK_TYPE, (_, id: string) => dbDeleteLinkType(id))
 
   // Attachments
   ipcMain.handle(IPC.ADD_ATTACHMENT, (_, thoughtId: string, type: 'file' | 'url', name: string, filePath: string) =>
@@ -58,7 +69,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC.REMOVE_TAG_FROM_THOUGHT, (_, thoughtId: string, tagId: string) => dbRemoveTagFromThought(thoughtId, tagId))
 
   // Types
-  ipcMain.handle(IPC.CREATE_TYPE, (_, name: string, color: string) => dbCreateType(name, color))
+  ipcMain.handle(IPC.CREATE_TYPE, (_, name: string, color: string, icon?: string) => dbCreateType(name, color, icon))
   ipcMain.handle(IPC.GET_ALL_TYPES, () => dbGetAllTypes())
 
   // File system

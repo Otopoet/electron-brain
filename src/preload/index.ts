@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/types'
-import type { Thought, Link, Attachment, Neighborhood, FilePreviewData, Tag, ThoughtType, IndexStatus, ThoughtWithScore } from '../shared/types'
+import type { Thought, Link, Attachment, Neighborhood, FilePreviewData, Tag, ThoughtType, LinkType, IndexStatus, ThoughtWithScore } from '../shared/types'
 
 const brain = {
   // Thoughts
@@ -12,12 +12,21 @@ const brain = {
   getNeighborhood: (id: string): Promise<Neighborhood> => ipcRenderer.invoke(IPC.GET_NEIGHBORHOOD, id),
   searchThoughts: (query: string): Promise<Thought[]> => ipcRenderer.invoke(IPC.SEARCH_THOUGHTS, query),
 
+  // Pin
+  togglePin: (id: string): Promise<Thought> => ipcRenderer.invoke(IPC.TOGGLE_PIN_THOUGHT, id),
+  getPinnedThoughts: (): Promise<Thought[]> => ipcRenderer.invoke(IPC.GET_PINNED_THOUGHTS),
+
   // Links
-  createLink: (sourceId: string, targetId: string, type: 'child' | 'jump', label?: string, isOneWay?: number): Promise<Link> =>
-    ipcRenderer.invoke(IPC.CREATE_LINK, sourceId, targetId, type, label, isOneWay),
-  updateLink: (id: string, patch: { label?: string; is_one_way?: number }): Promise<void> => ipcRenderer.invoke(IPC.UPDATE_LINK, id, patch),
+  createLink: (sourceId: string, targetId: string, type: 'child' | 'jump', label?: string, isOneWay?: number, color?: string, width?: number, linkTypeId?: string): Promise<Link> =>
+    ipcRenderer.invoke(IPC.CREATE_LINK, sourceId, targetId, type, label, isOneWay, color, width, linkTypeId),
+  updateLink: (id: string, patch: { label?: string; is_one_way?: number; color?: string; width?: number; link_type_id?: string | null }): Promise<void> => ipcRenderer.invoke(IPC.UPDATE_LINK, id, patch),
   deleteLink: (id: string): Promise<void> => ipcRenderer.invoke(IPC.DELETE_LINK, id),
   getAllLinks: (): Promise<Link[]> => ipcRenderer.invoke(IPC.GET_ALL_LINKS),
+
+  // Link types
+  createLinkType: (name: string, color: string, width: number): Promise<LinkType> => ipcRenderer.invoke(IPC.CREATE_LINK_TYPE, name, color, width),
+  getAllLinkTypes: (): Promise<LinkType[]> => ipcRenderer.invoke(IPC.GET_ALL_LINK_TYPES),
+  deleteLinkType: (id: string): Promise<void> => ipcRenderer.invoke(IPC.DELETE_LINK_TYPE, id),
 
   // Attachments
   addAttachment: (thoughtId: string, type: 'file' | 'url', name: string, path: string): Promise<Attachment> =>
@@ -31,7 +40,7 @@ const brain = {
   removeTagFromThought: (thoughtId: string, tagId: string): Promise<void> => ipcRenderer.invoke(IPC.REMOVE_TAG_FROM_THOUGHT, thoughtId, tagId),
 
   // Types
-  createType: (name: string, color: string): Promise<ThoughtType> => ipcRenderer.invoke(IPC.CREATE_TYPE, name, color),
+  createType: (name: string, color: string, icon?: string): Promise<ThoughtType> => ipcRenderer.invoke(IPC.CREATE_TYPE, name, color, icon),
   getAllTypes: (): Promise<ThoughtType[]> => ipcRenderer.invoke(IPC.GET_ALL_TYPES),
 
   // File system

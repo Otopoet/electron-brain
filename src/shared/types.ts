@@ -4,6 +4,7 @@ export interface Thought {
   notes: string
   color: string
   type_id: string | null
+  is_pinned: number        // 0 = not pinned, 1 = pinned
   created_at: number
   updated_at: number
 }
@@ -14,7 +15,10 @@ export interface Link {
   target_id: string
   type: 'child' | 'jump'
   label: string
-  is_one_way: number  // 0 = bidirectional, 1 = source→target only
+  is_one_way: number       // 0 = bidirectional, 1 = source→target only
+  color: string            // '' = use default
+  width: number            // 0 = use default (1.5)
+  link_type_id: string | null
   created_at: number
 }
 
@@ -38,7 +42,16 @@ export interface ThoughtType {
   id: string
   name: string
   color: string
+  icon: string             // emoji or empty string
   super_type_id: string | null
+  created_at: number
+}
+
+export interface LinkType {
+  id: string
+  name: string
+  color: string
+  width: number
   created_at: number
 }
 
@@ -90,6 +103,11 @@ export const IPC = {
   REMOVE_TAG_FROM_THOUGHT: 'remove-tag-from-thought',
   CREATE_TYPE: 'create-type',
   GET_ALL_TYPES: 'get-all-types',
+  TOGGLE_PIN_THOUGHT: 'toggle-pin-thought',
+  GET_PINNED_THOUGHTS: 'get-pinned-thoughts',
+  CREATE_LINK_TYPE: 'create-link-type',
+  GET_ALL_LINK_TYPES: 'get-all-link-types',
+  DELETE_LINK_TYPE: 'delete-link-type',
   PICK_FILE: 'pick-file',
   OPEN_FILE: 'open-file',
   READ_FILE_PREVIEW: 'read-file-preview',

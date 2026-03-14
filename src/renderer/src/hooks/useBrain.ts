@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
-import type { Thought, Neighborhood, Attachment, Tag, ThoughtType, IndexStatus, ThoughtWithScore } from '../../../shared/types'
+import type { Thought, Neighborhood, Attachment, Tag, ThoughtType, LinkType, IndexStatus, ThoughtWithScore } from '../../../shared/types'
 
 export interface BrainState {
   activeId: string | null
@@ -7,13 +7,17 @@ export interface BrainState {
   allThoughts: Thought[]
   allTags: Tag[]
   allTypes: ThoughtType[]
+  allLinkTypes: LinkType[]
+  pinnedThoughts: Thought[]
+  history: string[]   // last 20 navigated IDs, most-recent first
   loading: boolean
   indexStatus: IndexStatus
 }
 
 export function useBrain() {
   const [state, setState] = useState<BrainState>({
-    activeId: null, neighborhood: null, allThoughts: [], allTags: [], allTypes: [], loading: false,
+    activeId: null, neighborhood: null, allThoughts: [], allTags: [], allTypes: [],
+    allLinkTypes: [], pinnedThoughts: [], history: [], loading: false,
     indexStatus: { indexed: 0, total: 0, loading: false }
   })
 
@@ -23,8 +27,23 @@ export function useBrain() {
   }, [])
 
   const refreshMeta = useCallback(async () => {
-    const [tags, types] = await Promise.all([window.brain.getAllTags(), window.brain.getAllTypes()])
-    setState(s => ({ ...s, allTags: tags, allTypes: types }))
+    const [tags, types, linkTypes, pinned] = await Promise.all([
+      window.brain.getAllTags(),
+      window.brain.getAllTypes(),
+      window.brain.getAllLinkTypes(),
+      window.brain.getPinnedThoughts()
+    ])
+    setState(s => ({ ...s, allTags: tags, allTypes: types, allLinkTypes: linkTypes, pinnedThoughts: pinned }))
+  }, [])
+
+  const refreshPinned = useCallback(async () => {
+    const pinned = await window.brain.getPinnedThoughts()
+    setState(s => ({ ...s, pinnedThoughts: pinned }))
+  }, [])
+
+  const refreshLinkTypes = useCallback(async () => {
+    const linkTypes = await window.brain.getAllLinkTypes()
+    setState(s => ({ ...s, allLinkTypes: linkTypes }))
   }, [])
 
   // Subscribe to embedding index progress events from main process
@@ -50,7 +69,11 @@ export function useBrain() {
   }, [])
 
   const navigate = useCallback(async (id: string) => {
-    setState(s => ({ ...s, loading: true }))
+    setState(s => ({
+      ...s,
+      loading: true,
+      history: [id, ...s.history.filter(h => h !== id)].slice(0, 20)
+    }))
     try {
       const neighborhood = await window.brain.getNeighborhood(id)
       setState(s => ({ ...s, activeId: id, neighborhood, loading: false }))
@@ -94,6 +117,7 @@ export function useBrain() {
   const deleteThought = useCallback(async (id: string) => {
     await window.brain.deleteThought(id)
     await refreshAllThoughts()
+    await refreshPinned()
     if (state.activeId === id) {
       const thoughts = await window.brain.getAllThoughts()
       if (thoughts.length > 0) await navigate(thoughts[0].id)
@@ -101,14 +125,14 @@ export function useBrain() {
     } else if (state.activeId) {
       await refreshNeighborhood(state.activeId)
     }
-  }, [state.activeId, navigate, refreshAllThoughts, refreshNeighborhood])
+  }, [state.activeId, navigate, refreshAllThoughts, refreshNeighborhood, refreshPinned])
 
   const createLink = useCallback(async (sourceId: string, targetId: string, type: 'child' | 'jump', label?: string, isOneWay?: number) => {
     await window.brain.createLink(sourceId, targetId, type, label, isOneWay)
     if (state.activeId) await refreshNeighborhood(state.activeId)
   }, [state.activeId, refreshNeighborhood])
 
-  const updateLink = useCallback(async (id: string, patch: { label?: string; is_one_way?: number }) => {
+  const updateLink = useCallback(async (id: string, patch: { label?: string; is_one_way?: number; color?: string; width?: number; link_type_id?: string | null }) => {
     await window.brain.updateLink(id, patch)
     if (state.activeId) await refreshNeighborhood(state.activeId)
   }, [state.activeId, refreshNeighborhood])
@@ -156,11 +180,32 @@ export function useBrain() {
   }, [state.activeId, refreshNeighborhood])
 
   // Types
-  const createType = useCallback(async (name: string, color: string): Promise<ThoughtType> => {
-    const t = await window.brain.createType(name, color)
+  const createType = useCallback(async (name: string, color: string, icon?: string): Promise<ThoughtType> => {
+    const t = await window.brain.createType(name, color, icon)
     await refreshMeta()
     return t
   }, [refreshMeta])
+
+  // Pin
+  const togglePin = useCallback(async (id: string) => {
+    await window.brain.togglePin(id)
+    await refreshPinned()
+    // Refresh neighborhood so pin icon updates
+    if (state.activeId) await refreshNeighborhood(state.activeId)
+    await refreshAllThoughts()
+  }, [state.activeId, refreshPinned, refreshNeighborhood, refreshAllThoughts])
+
+  // Link types
+  const createLinkType = useCallback(async (name: string, color: string, width: number): Promise<LinkType> => {
+    const lt = await window.brain.createLinkType(name, color, width)
+    await refreshLinkTypes()
+    return lt
+  }, [refreshLinkTypes])
+
+  const deleteLinkType = useCallback(async (id: string) => {
+    await window.brain.deleteLinkType(id)
+    await refreshLinkTypes()
+  }, [refreshLinkTypes])
 
   // Semantic search
   const semanticSearch = useCallback(async (query: string, topK = 10): Promise<ThoughtWithScore[]> => {
@@ -184,6 +229,9 @@ export function useBrain() {
     addTagToThought,
     removeTagFromThought,
     createType,
+    togglePin,
+    createLinkType,
+    deleteLinkType,
     semanticSearch
   }
 }

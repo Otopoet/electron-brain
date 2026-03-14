@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import { app } from 'electron'
 import path from 'path'
 import { v4 as uuidv4 } from 'uuid'
-import type { Thought, Link, Attachment, Neighborhood } from '../shared/types'
+import type { Thought, Link, Attachment, Neighborhood, Tag, ThoughtType } from '../shared/types'
 
 let db: Database.Database
 
@@ -12,6 +12,7 @@ export function initDatabase(): void {
   db.pragma('journal_mode = WAL')
   db.pragma('foreign_keys = ON')
   createSchema()
+  runMigrations()
 }
 
 function createSchema(): void {
@@ -21,6 +22,7 @@ function createSchema(): void {
       title TEXT NOT NULL,
       notes TEXT DEFAULT '',
       color TEXT DEFAULT '#4A90E2',
+      type_id TEXT DEFAULT NULL,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -30,6 +32,8 @@ function createSchema(): void {
       source_id TEXT NOT NULL,
       target_id TEXT NOT NULL,
       type TEXT NOT NULL DEFAULT 'child',
+      label TEXT DEFAULT '',
+      is_one_way INTEGER DEFAULT 0,
       created_at INTEGER NOT NULL,
       FOREIGN KEY(source_id) REFERENCES thoughts(id) ON DELETE CASCADE,
       FOREIGN KEY(target_id) REFERENCES thoughts(id) ON DELETE CASCADE
@@ -45,11 +49,31 @@ function createSchema(): void {
       FOREIGN KEY(thought_id) REFERENCES thoughts(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS tags (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      color TEXT DEFAULT '#888888',
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS thought_tags (
+      thought_id TEXT NOT NULL,
+      tag_id TEXT NOT NULL,
+      PRIMARY KEY(thought_id, tag_id),
+      FOREIGN KEY(thought_id) REFERENCES thoughts(id) ON DELETE CASCADE,
+      FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS thought_types (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      color TEXT DEFAULT '#4A90E2',
+      super_type_id TEXT DEFAULT NULL,
+      created_at INTEGER NOT NULL
+    );
+
     CREATE VIRTUAL TABLE IF NOT EXISTS thoughts_fts USING fts5(
-      title,
-      notes,
-      content=thoughts,
-      content_rowid=rowid
+      title, notes, content=thoughts, content_rowid=rowid
     );
 
     CREATE TRIGGER IF NOT EXISTS thoughts_ai AFTER INSERT ON thoughts BEGIN
@@ -65,20 +89,22 @@ function createSchema(): void {
   `)
 }
 
+function runMigrations(): void {
+  const cols = (table: string) =>
+    (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(r => r.name)
+  if (!cols('thoughts').includes('type_id'))  db.exec(`ALTER TABLE thoughts ADD COLUMN type_id TEXT DEFAULT NULL`)
+  if (!cols('links').includes('label'))       db.exec(`ALTER TABLE links ADD COLUMN label TEXT DEFAULT ''`)
+  if (!cols('links').includes('is_one_way'))  db.exec(`ALTER TABLE links ADD COLUMN is_one_way INTEGER DEFAULT 0`)
+}
+
+// ── Thoughts ──────────────────────────────────────────────────────────────────
+
 export function dbCreateThought(title: string, color?: string): Thought {
   const now = Date.now()
-  const thought: Thought = {
-    id: uuidv4(),
-    title,
-    notes: '',
-    color: color ?? '#4A90E2',
-    created_at: now,
-    updated_at: now
-  }
-  db.prepare(
-    'INSERT INTO thoughts (id, title, notes, color, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(thought.id, thought.title, thought.notes, thought.color, thought.created_at, thought.updated_at)
-  return thought
+  const t: Thought = { id: uuidv4(), title, notes: '', color: color ?? '#4A90E2', type_id: null, created_at: now, updated_at: now }
+  db.prepare('INSERT INTO thoughts (id,title,notes,color,type_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?)')
+    .run(t.id, t.title, t.notes, t.color, t.type_id, t.created_at, t.updated_at)
+  return t
 }
 
 export function dbGetThought(id: string): Thought | undefined {
@@ -87,8 +113,7 @@ export function dbGetThought(id: string): Thought | undefined {
 
 export function dbUpdateThought(id: string, patch: Partial<Omit<Thought, 'id' | 'created_at'>>): void {
   const fields = Object.entries(patch).map(([k]) => `${k} = ?`).join(', ')
-  const values = Object.values(patch)
-  db.prepare(`UPDATE thoughts SET ${fields}, updated_at = ? WHERE id = ?`).run(...values, Date.now(), id)
+  db.prepare(`UPDATE thoughts SET ${fields}, updated_at = ? WHERE id = ?`).run(...Object.values(patch), Date.now(), id)
 }
 
 export function dbDeleteThought(id: string): void {
@@ -100,11 +125,13 @@ export function dbGetAllThoughts(): Thought[] {
 }
 
 export function dbSearchThoughts(query: string): Thought[] {
-  const escaped = query.replace(/['"*]/g, ' ')
+  const esc = query.replace(/['"*]/g, ' ')
   return db.prepare(
     `SELECT t.* FROM thoughts t JOIN thoughts_fts fts ON t.rowid = fts.rowid WHERE thoughts_fts MATCH ? ORDER BY rank`
-  ).all(escaped + '*') as Thought[]
+  ).all(esc + '*') as Thought[]
 }
+
+// ── Neighborhood ──────────────────────────────────────────────────────────────
 
 export function dbGetNeighborhood(id: string): Neighborhood {
   const thought = dbGetThought(id)
@@ -118,27 +145,60 @@ export function dbGetNeighborhood(id: string): Neighborhood {
     `SELECT t.* FROM thoughts t JOIN links l ON l.target_id = t.id WHERE l.source_id = ? AND l.type = 'child'`
   ).all(id) as Thought[]
 
+  // Jumps: respect one-way — only show if bidirectional OR we are the source
   const jumps = db.prepare(
-    `SELECT t.* FROM thoughts t JOIN links l ON (l.source_id = t.id OR l.target_id = t.id)
-     WHERE (l.source_id = ? OR l.target_id = ?) AND l.type = 'jump' AND t.id != ?`
+    `SELECT DISTINCT t.* FROM thoughts t
+     JOIN links l ON (
+       (l.source_id = t.id AND l.target_id = ?) OR
+       (l.target_id = t.id AND l.source_id = ? AND l.is_one_way = 0)
+     )
+     WHERE l.type = 'jump' AND t.id != ?`
   ).all(id, id, id) as Thought[]
 
+  // Siblings: share at least one parent with this thought
+  const siblings = db.prepare(
+    `SELECT DISTINCT t.* FROM thoughts t
+     JOIN links l1 ON l1.target_id = t.id AND l1.type = 'child'
+     JOIN links l2 ON l2.target_id = ? AND l2.type = 'child' AND l2.source_id = l1.source_id
+     WHERE t.id != ?`
+  ).all(id, id) as Thought[]
+
   const links = db.prepare(
-    `SELECT l.* FROM links l WHERE l.source_id = ? OR l.target_id = ?`
+    `SELECT l.* FROM links l
+     WHERE l.source_id = ?
+        OR (l.target_id = ? AND (l.is_one_way = 0 OR l.type = 'child'))`
   ).all(id, id) as Link[]
 
   const attachments = db.prepare(
     'SELECT * FROM attachments WHERE thought_id = ? ORDER BY created_at DESC'
   ).all(id) as Attachment[]
 
-  return { thought, parents, children, jumps, links, attachments }
+  const tags = db.prepare(
+    `SELECT tg.* FROM tags tg JOIN thought_tags tt ON tt.tag_id = tg.id WHERE tt.thought_id = ?`
+  ).all(id) as Tag[]
+
+  // Backlinks: other thoughts whose notes mention this thought's title
+  const backlinks = thought.title.trim().length > 2
+    ? (db.prepare(
+        `SELECT * FROM thoughts WHERE id != ? AND instr(lower(notes), lower(?)) > 0 ORDER BY updated_at DESC LIMIT 15`
+      ).all(id, thought.title) as Thought[])
+    : []
+
+  return { thought, parents, children, jumps, siblings, links, attachments, tags, backlinks }
 }
 
-export function dbCreateLink(sourceId: string, targetId: string, type: 'child' | 'jump'): Link {
-  const link: Link = { id: uuidv4(), source_id: sourceId, target_id: targetId, type, created_at: Date.now() }
-  db.prepare('INSERT INTO links (id, source_id, target_id, type, created_at) VALUES (?, ?, ?, ?, ?)')
-    .run(link.id, link.source_id, link.target_id, link.type, link.created_at)
+// ── Links ─────────────────────────────────────────────────────────────────────
+
+export function dbCreateLink(sourceId: string, targetId: string, type: 'child' | 'jump', label = '', isOneWay = 0): Link {
+  const link: Link = { id: uuidv4(), source_id: sourceId, target_id: targetId, type, label, is_one_way: isOneWay, created_at: Date.now() }
+  db.prepare('INSERT INTO links (id,source_id,target_id,type,label,is_one_way,created_at) VALUES (?,?,?,?,?,?,?)')
+    .run(link.id, link.source_id, link.target_id, link.type, link.label, link.is_one_way, link.created_at)
   return link
+}
+
+export function dbUpdateLink(id: string, patch: { label?: string; is_one_way?: number }): void {
+  const fields = Object.entries(patch).map(([k]) => `${k} = ?`).join(', ')
+  db.prepare(`UPDATE links SET ${fields} WHERE id = ?`).run(...Object.values(patch), id)
 }
 
 export function dbDeleteLink(id: string): void {
@@ -149,13 +209,47 @@ export function dbGetAllLinks(): Link[] {
   return db.prepare('SELECT * FROM links').all() as Link[]
 }
 
+// ── Attachments ───────────────────────────────────────────────────────────────
+
 export function dbAddAttachment(thoughtId: string, type: 'file' | 'url', name: string, filePath: string): Attachment {
-  const att: Attachment = { id: uuidv4(), thought_id: thoughtId, type, name, path: filePath, created_at: Date.now() }
-  db.prepare('INSERT INTO attachments (id, thought_id, type, name, path, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(att.id, att.thought_id, att.type, att.name, att.path, att.created_at)
-  return att
+  const a: Attachment = { id: uuidv4(), thought_id: thoughtId, type, name, path: filePath, created_at: Date.now() }
+  db.prepare('INSERT INTO attachments (id,thought_id,type,name,path,created_at) VALUES (?,?,?,?,?,?)')
+    .run(a.id, a.thought_id, a.type, a.name, a.path, a.created_at)
+  return a
 }
 
 export function dbDeleteAttachment(id: string): void {
   db.prepare('DELETE FROM attachments WHERE id = ?').run(id)
+}
+
+// ── Tags ──────────────────────────────────────────────────────────────────────
+
+export function dbCreateTag(name: string, color: string): Tag {
+  const tag: Tag = { id: uuidv4(), name, color, created_at: Date.now() }
+  db.prepare('INSERT INTO tags (id,name,color,created_at) VALUES (?,?,?,?)').run(tag.id, tag.name, tag.color, tag.created_at)
+  return tag
+}
+
+export function dbGetAllTags(): Tag[] {
+  return db.prepare('SELECT * FROM tags ORDER BY name').all() as Tag[]
+}
+
+export function dbAddTagToThought(thoughtId: string, tagId: string): void {
+  db.prepare('INSERT OR IGNORE INTO thought_tags (thought_id,tag_id) VALUES (?,?)').run(thoughtId, tagId)
+}
+
+export function dbRemoveTagFromThought(thoughtId: string, tagId: string): void {
+  db.prepare('DELETE FROM thought_tags WHERE thought_id = ? AND tag_id = ?').run(thoughtId, tagId)
+}
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export function dbCreateType(name: string, color: string): ThoughtType {
+  const t: ThoughtType = { id: uuidv4(), name, color, super_type_id: null, created_at: Date.now() }
+  db.prepare('INSERT INTO thought_types (id,name,color,super_type_id,created_at) VALUES (?,?,?,?,?)').run(t.id, t.name, t.color, t.super_type_id, t.created_at)
+  return t
+}
+
+export function dbGetAllTypes(): ThoughtType[] {
+  return db.prepare('SELECT * FROM thought_types ORDER BY name').all() as ThoughtType[]
 }

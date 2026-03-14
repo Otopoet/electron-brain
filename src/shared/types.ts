@@ -3,6 +3,7 @@ export interface Thought {
   title: string
   notes: string
   color: string
+  type_id: string | null
   created_at: number
   updated_at: number
 }
@@ -12,6 +13,8 @@ export interface Link {
   source_id: string
   target_id: string
   type: 'child' | 'jump'
+  label: string
+  is_one_way: number  // 0 = bidirectional, 1 = source→target only
   created_at: number
 }
 
@@ -24,13 +27,31 @@ export interface Attachment {
   created_at: number
 }
 
+export interface Tag {
+  id: string
+  name: string
+  color: string
+  created_at: number
+}
+
+export interface ThoughtType {
+  id: string
+  name: string
+  color: string
+  super_type_id: string | null
+  created_at: number
+}
+
 export interface Neighborhood {
   thought: Thought
   parents: Thought[]
   children: Thought[]
   jumps: Thought[]
+  siblings: Thought[]
   links: Link[]
   attachments: Attachment[]
+  tags: Tag[]
+  backlinks: Thought[]
 }
 
 export interface FilePreviewData {
@@ -50,8 +71,15 @@ export const IPC = {
   CREATE_LINK: 'create-link',
   DELETE_LINK: 'delete-link',
   GET_ALL_LINKS: 'get-all-links',
+  UPDATE_LINK: 'update-link',
   ADD_ATTACHMENT: 'add-attachment',
   DELETE_ATTACHMENT: 'delete-attachment',
+  CREATE_TAG: 'create-tag',
+  GET_ALL_TAGS: 'get-all-tags',
+  ADD_TAG_TO_THOUGHT: 'add-tag-to-thought',
+  REMOVE_TAG_FROM_THOUGHT: 'remove-tag-from-thought',
+  CREATE_TYPE: 'create-type',
+  GET_ALL_TYPES: 'get-all-types',
   PICK_FILE: 'pick-file',
   OPEN_FILE: 'open-file',
   READ_FILE_PREVIEW: 'read-file-preview'

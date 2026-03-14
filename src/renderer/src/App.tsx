@@ -46,15 +46,32 @@ export function App() {
     }
   }, [brain])
 
+  const { indexStatus } = brain
+  const showIndexPill = indexStatus.loading || indexStatus.indexed < indexStatus.total
+
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: '#0d1117', color: '#e8edf5', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', overflow: 'hidden', userSelect: 'none' }}>
       {/* Toolbar */}
-      <div style={{ height: 52, display: 'flex', alignItems: 'center', gap: 12, padding: '0 16px 0 80px', borderBottom: '1px solid rgba(255,255,255,0.07)', background: '#10151e', flexShrink: 0 }}>
+      <div style={{ height: 52, display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px 0 80px', borderBottom: '1px solid rgba(255,255,255,0.07)', background: '#10151e', flexShrink: 0 }}>
         <SearchBar
           onNavigate={brain.navigate}
           onCreateThought={(title, linkAs) => handleCreate(title, linkAs)}
+          onSemanticSearch={brain.semanticSearch}
+          indexStatus={indexStatus}
           inputRef={searchRef as React.RefObject<HTMLInputElement>}
         />
+
+        {/* Index progress pill — shown while indexing, disappears when complete */}
+        {showIndexPill && indexStatus.total > 0 && (
+          <div style={{
+            fontSize: 10, color: 'rgba(123,104,238,0.75)', background: 'rgba(123,104,238,0.12)',
+            border: '1px solid rgba(123,104,238,0.25)', borderRadius: 10,
+            padding: '3px 8px', whiteSpace: 'nowrap', flexShrink: 0
+          }}>
+            ⚡ {indexStatus.indexed}/{indexStatus.total}
+          </div>
+        )}
+
         <button onClick={() => setShowNewModal(true)}
           style={{ background: 'rgba(74,144,226,0.8)', border: 'none', color: '#fff', borderRadius: 8, padding: '7px 16px', fontSize: 13, cursor: 'pointer', fontWeight: 500, whiteSpace: 'nowrap' }}>
           + New Thought

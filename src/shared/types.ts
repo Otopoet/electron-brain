@@ -60,6 +60,16 @@ export interface FilePreviewData {
   text?: string
 }
 
+export interface IndexStatus {
+  indexed: number   // thoughts that have embeddings
+  total: number     // all thoughts
+  loading: boolean  // model is still initializing / downloading
+}
+
+export interface ThoughtWithScore extends Thought {
+  score: number     // 0–100 similarity score
+}
+
 export const IPC = {
   CREATE_THOUGHT: 'create-thought',
   GET_THOUGHT: 'get-thought',
@@ -82,5 +92,8 @@ export const IPC = {
   GET_ALL_TYPES: 'get-all-types',
   PICK_FILE: 'pick-file',
   OPEN_FILE: 'open-file',
-  READ_FILE_PREVIEW: 'read-file-preview'
+  READ_FILE_PREVIEW: 'read-file-preview',
+  SEMANTIC_SEARCH: 'semantic-search',
+  GET_INDEX_STATUS: 'get-index-status',
+  INDEX_PROGRESS: 'index:progress'
 } as const

@@ -1,6 +1,6 @@
 {
   "name": "electron-brain",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "TheBrain-style personal knowledge manager for Mac",
   "main": "./out/main/index.js",
   "scripts": {
@@ -34,6 +34,7 @@
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "@types/uuid": "^10.0.0",
+    "@xenova/transformers": "^2.17.2",
     "better-sqlite3": "^11.0.0",
     "d3": "^7.9.0",
     "react": "^18.3.0",
@@ -47,16 +48,26 @@
       "output": "release"
     },
     "mac": {
-      "target": [{ "target": "dmg", "arch": ["arm64", "x64"] }],
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
       "category": "public.app-category.productivity"
     },
     "files": [
       "out/**/*",
       "!out/**/*.map",
-      "node_modules/better-sqlite3/build/Release/*.node"
+      "node_modules/better-sqlite3/build/Release/*.node",
+      "node_modules/onnxruntime-node/bin/**/*"
     ],
     "asarUnpack": [
-      "node_modules/better-sqlite3/build/Release/*.node"
+      "node_modules/better-sqlite3/build/Release/*.node",
+      "node_modules/onnxruntime-node/bin/**/*"
     ],
     "npmRebuild": true
   }

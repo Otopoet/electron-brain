@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import { app } from 'electron'
 import path from 'path'
 import { v4 as uuidv4 } from 'uuid'
-import type { Thought, Link, Attachment, Neighborhood, Tag, ThoughtType } from '../shared/types'
+import type { Thought, Link, Attachment, Neighborhood, Tag, ThoughtType, ThoughtWithScore } from '../shared/types'
 
 let db: Database.Database
 
@@ -70,6 +70,12 @@ function createSchema(): void {
       color TEXT DEFAULT '#4A90E2',
       super_type_id TEXT DEFAULT NULL,
       created_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS thought_embeddings (
+      thought_id TEXT PRIMARY KEY REFERENCES thoughts(id) ON DELETE CASCADE,
+      embedding  BLOB    NOT NULL,
+      updated_at INTEGER NOT NULL
     );
 
     CREATE VIRTUAL TABLE IF NOT EXISTS thoughts_fts USING fts5(
@@ -252,4 +258,64 @@ export function dbCreateType(name: string, color: string): ThoughtType {
 
 export function dbGetAllTypes(): ThoughtType[] {
   return db.prepare('SELECT * FROM thought_types ORDER BY name').all() as ThoughtType[]
+}
+
+// ── Embeddings ─────────────────────────────────────────────────────────────────
+
+export function dbUpsertEmbedding(thoughtId: string, embedding: Float32Array): void {
+  const buf = Buffer.from(embedding.buffer)
+  db.prepare('INSERT OR REPLACE INTO thought_embeddings (thought_id, embedding, updated_at) VALUES (?,?,?)')
+    .run(thoughtId, buf, Date.now())
+}
+
+export function dbGetAllEmbeddings(): { thoughtId: string; embedding: Float32Array }[] {
+  const rows = db.prepare('SELECT thought_id, embedding FROM thought_embeddings').all() as { thought_id: string; embedding: Buffer }[]
+  return rows.map(r => ({
+    thoughtId: r.thought_id,
+    embedding: new Float32Array(r.embedding.buffer, r.embedding.byteOffset, r.embedding.byteLength / 4)
+  }))
+}
+
+export function dbGetUnindexedThoughts(): string[] {
+  const rows = db.prepare(
+    `SELECT id FROM thoughts WHERE id NOT IN (SELECT thought_id FROM thought_embeddings)`
+  ).all() as { id: string }[]
+  return rows.map(r => r.id)
+}
+
+export function dbGetIndexStatus(): { indexed: number; total: number } {
+  const total = (db.prepare('SELECT COUNT(*) as n FROM thoughts').get() as { n: number }).n
+  const indexed = (db.prepare('SELECT COUNT(*) as n FROM thought_embeddings').get() as { n: number }).n
+  return { indexed, total }
+}
+
+export function dbSemanticSearch(queryVec: Float32Array, topK = 10): ThoughtWithScore[] {
+  const all = dbGetAllEmbeddings()
+  if (all.length === 0) return []
+
+  const scored = all.map(({ thoughtId, embedding }) => ({
+    thoughtId,
+    score: cosineSimilarity(queryVec, embedding)
+  }))
+  scored.sort((a, b) => b.score - a.score)
+
+  const top = scored.slice(0, topK)
+  const results: ThoughtWithScore[] = []
+  for (const { thoughtId, score } of top) {
+    const t = dbGetThought(thoughtId)
+    if (t) results.push({ ...t, score: Math.round(score * 100) })
+  }
+  return results
+}
+
+function cosineSimilarity(a: Float32Array, b: Float32Array): number {
+  let dot = 0, magA = 0, magB = 0
+  const len = Math.min(a.length, b.length)
+  for (let i = 0; i < len; i++) {
+    dot  += a[i] * b[i]
+    magA += a[i] * a[i]
+    magB += b[i] * b[i]
+  }
+  const denom = Math.sqrt(magA) * Math.sqrt(magB)
+  return denom === 0 ? 0 : dot / denom
 }

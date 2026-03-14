@@ -3,6 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { initDatabase } from './database'
 import { registerIpcHandlers } from './ipc-handlers'
+import { startBackgroundIndexer } from './embeddings'
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -37,6 +38,11 @@ app.whenReady().then(() => {
   registerIpcHandlers()
 
   const mainWin = createWindow()
+
+  // Start background embedding indexer once window is ready
+  mainWin.webContents.once('did-finish-load', () => {
+    startBackgroundIndexer(mainWin)
+  })
 
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     {

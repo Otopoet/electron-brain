@@ -8,18 +8,36 @@ import {
   dbCreateLink, dbUpdateLink, dbDeleteLink, dbGetAllLinks,
   dbAddAttachment, dbDeleteAttachment,
   dbCreateTag, dbGetAllTags, dbAddTagToThought, dbRemoveTagFromThought,
-  dbCreateType, dbGetAllTypes
+  dbCreateType, dbGetAllTypes,
+  dbGetIndexStatus
 } from './database'
+import { queueThought, semanticSearch, getStatus } from './embeddings'
 
 export function registerIpcHandlers(): void {
   // Thoughts
-  ipcMain.handle(IPC.CREATE_THOUGHT, (_, title: string, color?: string) => dbCreateThought(title, color))
+  ipcMain.handle(IPC.CREATE_THOUGHT, (_, title: string, color?: string) => {
+    const t = dbCreateThought(title, color)
+    queueThought(t.id)   // queue for background embedding
+    return t
+  })
   ipcMain.handle(IPC.GET_THOUGHT, (_, id: string) => dbGetThought(id))
-  ipcMain.handle(IPC.UPDATE_THOUGHT, (_, id: string, patch: Record<string, unknown>) => dbUpdateThought(id, patch))
+  ipcMain.handle(IPC.UPDATE_THOUGHT, (_, id: string, patch: Record<string, unknown>) => {
+    dbUpdateThought(id, patch)
+    queueThought(id)     // re-embed on content change
+  })
   ipcMain.handle(IPC.DELETE_THOUGHT, (_, id: string) => dbDeleteThought(id))
   ipcMain.handle(IPC.GET_ALL_THOUGHTS, () => dbGetAllThoughts())
   ipcMain.handle(IPC.GET_NEIGHBORHOOD, (_, id: string) => dbGetNeighborhood(id))
   ipcMain.handle(IPC.SEARCH_THOUGHTS, (_, query: string) => dbSearchThoughts(query))
+
+  // Semantic search
+  ipcMain.handle(IPC.SEMANTIC_SEARCH, async (_, query: string, topK?: number) => {
+    return semanticSearch(query, topK)
+  })
+  ipcMain.handle(IPC.GET_INDEX_STATUS, () => {
+    const { indexed, total } = dbGetIndexStatus()
+    return { ...getStatus(), indexed, total }
+  })
 
   // Links
   ipcMain.handle(IPC.CREATE_LINK, (_, sourceId: string, targetId: string, type: 'child' | 'jump', label?: string, isOneWay?: number) =>

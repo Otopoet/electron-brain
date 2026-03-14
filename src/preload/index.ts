@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/types'
-import type { Thought, Link, Attachment, Neighborhood, FilePreviewData, Tag, ThoughtType } from '../shared/types'
+import type { Thought, Link, Attachment, Neighborhood, FilePreviewData, Tag, ThoughtType, IndexStatus, ThoughtWithScore } from '../shared/types'
 
 const brain = {
   // Thoughts
@@ -39,9 +39,21 @@ const brain = {
   openFile: (path: string): Promise<void> => ipcRenderer.invoke(IPC.OPEN_FILE, path),
   readFilePreview: (path: string): Promise<FilePreviewData> => ipcRenderer.invoke(IPC.READ_FILE_PREVIEW, path),
 
+  // Semantic search
+  semanticSearch: (query: string, topK?: number): Promise<ThoughtWithScore[]> =>
+    ipcRenderer.invoke(IPC.SEMANTIC_SEARCH, query, topK),
+  getIndexStatus: (): Promise<IndexStatus> => ipcRenderer.invoke(IPC.GET_INDEX_STATUS),
+
   // Menu events
   onMenuNewThought: (cb: () => void) => { ipcRenderer.on('menu:new-thought', cb); return () => ipcRenderer.off('menu:new-thought', cb) },
-  onMenuFocusSearch: (cb: () => void) => { ipcRenderer.on('menu:focus-search', cb); return () => ipcRenderer.off('menu:focus-search', cb) }
+  onMenuFocusSearch: (cb: () => void) => { ipcRenderer.on('menu:focus-search', cb); return () => ipcRenderer.off('menu:focus-search', cb) },
+
+  // Index progress events (main → renderer)
+  onIndexProgress: (cb: (status: IndexStatus) => void) => {
+    const handler = (_: Electron.IpcRendererEvent, status: IndexStatus) => cb(status)
+    ipcRenderer.on(IPC.INDEX_PROGRESS, handler)
+    return () => ipcRenderer.off(IPC.INDEX_PROGRESS, handler)
+  }
 }
 
 contextBridge.exposeInMainWorld('brain', brain)

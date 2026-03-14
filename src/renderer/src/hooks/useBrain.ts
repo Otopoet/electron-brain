@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
-import type { Thought, Neighborhood, Attachment, Tag, ThoughtType } from '../../../shared/types'
+import type { Thought, Neighborhood, Attachment, Tag, ThoughtType, IndexStatus, ThoughtWithScore } from '../../../shared/types'
 
 export interface BrainState {
   activeId: string | null
@@ -8,11 +8,13 @@ export interface BrainState {
   allTags: Tag[]
   allTypes: ThoughtType[]
   loading: boolean
+  indexStatus: IndexStatus
 }
 
 export function useBrain() {
   const [state, setState] = useState<BrainState>({
-    activeId: null, neighborhood: null, allThoughts: [], allTags: [], allTypes: [], loading: false
+    activeId: null, neighborhood: null, allThoughts: [], allTags: [], allTypes: [], loading: false,
+    indexStatus: { indexed: 0, total: 0, loading: false }
   })
 
   const refreshAllThoughts = useCallback(async () => {
@@ -23,6 +25,18 @@ export function useBrain() {
   const refreshMeta = useCallback(async () => {
     const [tags, types] = await Promise.all([window.brain.getAllTags(), window.brain.getAllTypes()])
     setState(s => ({ ...s, allTags: tags, allTypes: types }))
+  }, [])
+
+  // Subscribe to embedding index progress events from main process
+  useEffect(() => {
+    const off = window.brain.onIndexProgress(status => {
+      setState(s => ({ ...s, indexStatus: status }))
+    })
+    // Fetch initial status
+    window.brain.getIndexStatus().then(status => {
+      setState(s => ({ ...s, indexStatus: status }))
+    })
+    return off
   }, [])
 
   useEffect(() => {
@@ -148,6 +162,11 @@ export function useBrain() {
     return t
   }, [refreshMeta])
 
+  // Semantic search
+  const semanticSearch = useCallback(async (query: string, topK = 10): Promise<ThoughtWithScore[]> => {
+    return window.brain.semanticSearch(query, topK)
+  }, [])
+
   return {
     ...state,
     navigate,
@@ -164,6 +183,7 @@ export function useBrain() {
     createTag,
     addTagToThought,
     removeTagFromThought,
-    createType
+    createType,
+    semanticSearch
   }
 }

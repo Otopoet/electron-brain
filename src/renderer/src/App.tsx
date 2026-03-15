@@ -11,6 +11,8 @@ import type { NewThoughtLinkAs } from './components/NewThoughtModal'
 export function App() {
   const brain = useBrain()
   const [showNewModal, setShowNewModal] = useState(false)
+  const [defaultModalLinkAs, setDefaultModalLinkAs] = useState<NewThoughtLinkAs>('child')
+  const [renameCounter, setRenameCounter] = useState(0)
   const searchRef = useRef<HTMLInputElement>(null)
 
   // Navigate to first thought on mount
@@ -20,11 +22,52 @@ export function App() {
     }
   }, [brain.allThoughts.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Menu shortcuts
+  // Menu shortcuts (macOS menu bar)
   useEffect(() => {
     const offNew = window.brain.onMenuNewThought(() => setShowNewModal(true))
     const offSearch = window.brain.onMenuFocusSearch(() => searchRef.current?.focus())
     return () => { offNew(); offSearch() }
+  }, [])
+
+  // Global keyboard shortcuts
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const inInput = (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        (e.target as HTMLElement).isContentEditable
+      )
+
+      // Back / Forward — always active
+      if (e.altKey && e.key === 'ArrowLeft')  { e.preventDefault(); brain.goBack();    return }
+      if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); brain.goForward(); return }
+
+      // Other shortcuts only when not typing in an input
+      if (!inInput) {
+        if (e.key === 'F2') { e.preventDefault(); setRenameCounter(c => c + 1); return }
+        if (e.key === 'F6') { e.preventDefault(); searchRef.current?.focus(); return }
+        if (e.key === 'F7') {
+          e.preventDefault()
+          setDefaultModalLinkAs('parent')
+          setShowNewModal(true)
+          return
+        }
+        if (e.key === 'F8') {
+          e.preventDefault()
+          setDefaultModalLinkAs('jump')
+          setShowNewModal(true)
+          return
+        }
+        if (e.key === 'Home') { e.preventDefault(); brain.goHome(); return }
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [brain.goBack, brain.goForward, brain.goHome]) // stable callbacks, minimal rerenders
+
+  const openNewModal = useCallback(() => {
+    setDefaultModalLinkAs('child')
+    setShowNewModal(true)
   }, [])
 
   const handleCreate = useCallback(async (rawTitle: string, linkAs: NewThoughtLinkAs = 'child') => {
@@ -55,7 +98,49 @@ export function App() {
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: '#0d1117', color: '#e8edf5', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', overflow: 'hidden', userSelect: 'none' }}>
 
       {/* Toolbar */}
-      <div style={{ height: 52, display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px 0 80px', borderBottom: '1px solid rgba(255,255,255,0.07)', background: '#10151e', flexShrink: 0 }}>
+      <div style={{ height: 52, display: 'flex', alignItems: 'center', gap: 8, padding: '0 16px 0 80px', borderBottom: '1px solid rgba(255,255,255,0.07)', background: '#10151e', flexShrink: 0 }}>
+
+        {/* Back / Forward navigation buttons */}
+        <button
+          onClick={brain.goBack}
+          disabled={!brain.canGoBack}
+          title="Go back (Alt ←)"
+          style={{
+            background: 'none', border: 'none', color: brain.canGoBack ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.18)',
+            cursor: brain.canGoBack ? 'pointer' : 'default', fontSize: 16, padding: '4px 6px', flexShrink: 0,
+            transition: 'color 0.15s'
+          }}
+        >
+          ←
+        </button>
+        <button
+          onClick={brain.goForward}
+          disabled={!brain.canGoForward}
+          title="Go forward (Alt →)"
+          style={{
+            background: 'none', border: 'none', color: brain.canGoForward ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.18)',
+            cursor: brain.canGoForward ? 'pointer' : 'default', fontSize: 16, padding: '4px 6px', flexShrink: 0,
+            transition: 'color 0.15s'
+          }}
+        >
+          →
+        </button>
+        {brain.homeThoughtId && (
+          <button
+            onClick={brain.goHome}
+            title="Go to home thought (Home key)"
+            style={{
+              background: 'none', border: 'none', color: 'rgba(255,255,255,0.45)',
+              cursor: 'pointer', fontSize: 14, padding: '4px 6px', flexShrink: 0,
+              transition: 'color 0.15s'
+            }}
+            onMouseEnter={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.85)')}
+            onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.45)')}
+          >
+            🏠
+          </button>
+        )}
+
         <SearchBar
           onNavigate={brain.navigate}
           onCreateThought={(title, linkAs) => handleCreate(title, linkAs)}
@@ -74,7 +159,7 @@ export function App() {
           </div>
         )}
 
-        <button onClick={() => setShowNewModal(true)}
+        <button onClick={openNewModal}
           style={{ background: 'rgba(74,144,226,0.8)', border: 'none', color: '#fff', borderRadius: 8, padding: '7px 16px', fontSize: 13, cursor: 'pointer', fontWeight: 500, whiteSpace: 'nowrap' }}>
           + New Thought
         </button>
@@ -105,7 +190,7 @@ export function App() {
           allTypes={brain.allTypes}
           allLinkTypes={brain.allLinkTypes}
           onNavigate={brain.navigate}
-          onCreateChild={() => setShowNewModal(true)}
+          onCreateChild={() => openNewModal()}
           onCreateLink={brain.createLink}
         />
 
@@ -114,6 +199,7 @@ export function App() {
           onUpdate={brain.updateThought}
           onDeleteThought={brain.deleteThought}
           onTogglePin={brain.togglePin}
+          onSetHome={brain.setHomeThought}
           onAddAttachment={(type, name, path) => brain.addAttachment(type, name, path)}
           onDeleteAttachment={brain.deleteAttachment}
           onPickFile={brain.pickAndAttachFile}
@@ -131,11 +217,17 @@ export function App() {
           allTypes={brain.allTypes}
           allLinkTypes={brain.allLinkTypes}
           activeId={brain.activeId}
+          homeThoughtId={brain.homeThoughtId}
+          renameCounter={renameCounter}
         />
       </div>
 
       {showNewModal && (
-        <NewThoughtModal onConfirm={handleCreate} onCancel={() => setShowNewModal(false)} />
+        <NewThoughtModal
+          onConfirm={handleCreate}
+          onCancel={() => setShowNewModal(false)}
+          defaultLinkAs={defaultModalLinkAs}
+        />
       )}
     </div>
   )

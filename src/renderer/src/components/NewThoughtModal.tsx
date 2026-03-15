@@ -4,16 +4,18 @@ export type NewThoughtLinkAs = 'child' | 'parent' | 'jump' | 'orphan'
 
 export function NewThoughtModal({
   onConfirm,
-  onCancel
+  onCancel,
+  defaultLinkAs = 'child'
 }: {
   onConfirm: (title: string, linkAs: NewThoughtLinkAs) => void
   onCancel: () => void
+  defaultLinkAs?: NewThoughtLinkAs
 }) {
   const [title, setTitle] = useState('')
   const ref = useRef<HTMLInputElement>(null)
   useEffect(() => { ref.current?.focus() }, [])
 
-  const submit = (linkAs: NewThoughtLinkAs = 'child') => {
+  const submit = (linkAs: NewThoughtLinkAs = defaultLinkAs) => {
     if (title.trim()) onConfirm(title.trim(), linkAs)
   }
 

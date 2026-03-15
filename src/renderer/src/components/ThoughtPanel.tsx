@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
+import Underline from '@tiptap/extension-underline'
+import { Table, TableRow, TableCell, TableHeader } from '@tiptap/extension-table'
 import type { Neighborhood, Attachment, Thought, Tag, ThoughtType, LinkType, Link } from '../../../shared/types'
 import { FilePreview } from './FilePreview'
 import { buildMentionExtension } from './MentionExtension'
+import { NotesToolbar } from './NotesToolbar'
+import { MappedLinksFooter } from './MappedLinksFooter'
 
 interface Props {
   neighborhood: Neighborhood | null
@@ -22,11 +26,14 @@ interface Props {
   onCreateType: (name: string, color: string, icon?: string) => Promise<ThoughtType>
   onCreateLinkType: (name: string, color: string, width: number) => Promise<LinkType>
   onNavigate: (id: string) => void
+  onSetHome: (id: string | null) => void
   allThoughts: Thought[]
   allTags: Tag[]
   allTypes: ThoughtType[]
   allLinkTypes: LinkType[]
   activeId: string | null
+  homeThoughtId: string | null
+  renameCounter?: number
 }
 
 const COLORS = ['#4A90E2','#7B68EE','#E24A4A','#4AE28A','#E2B94A','#E24AB5','#4AE2D8','#9E9E9E']
@@ -58,8 +65,8 @@ function resolveLink(link: Link, allLinkTypes: LinkType[]) {
 export function ThoughtPanel({
   neighborhood, onUpdate, onDeleteThought, onTogglePin, onAddAttachment, onDeleteAttachment,
   onPickFile, onCreateLink, onUpdateLink, onDeleteLink, onAddTag, onRemoveTag,
-  onCreateTag, onCreateType, onCreateLinkType, onNavigate,
-  allThoughts, allTags, allTypes, allLinkTypes, activeId
+  onCreateTag, onCreateType, onCreateLinkType, onNavigate, onSetHome,
+  allThoughts, allTags, allTypes, allLinkTypes, activeId, homeThoughtId, renameCounter
 }: Props) {
   const [title, setTitle] = useState('')
   const [editingTitle, setEditingTitle] = useState(false)
@@ -102,7 +109,15 @@ export function ThoughtPanel({
   )
 
   const editor = useEditor({
-    extensions: [StarterKit, mentionExt],
+    extensions: [
+      StarterKit,
+      mentionExt,
+      Underline,
+      Table.configure({ resizable: true }),
+      TableRow,
+      TableCell,
+      TableHeader,
+    ],
     content: '',
     editorProps: { attributes: { class: 'tiptap-editor' } },
     onUpdate: ({ editor }) => {
@@ -126,6 +141,11 @@ export function ThoughtPanel({
       editor.commands.setContent(neighborhood.thought.notes || '', false)
     }
   }, [neighborhood?.thought.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // F2 rename trigger from parent
+  useEffect(() => {
+    if (renameCounter && renameCounter > 0) setEditingTitle(true)
+  }, [renameCounter])
 
   const saveTitle = useCallback(() => {
     setEditingTitle(false)
@@ -202,12 +222,26 @@ export function ThoughtPanel({
             <div key={c} onClick={() => onUpdate(thought.id, { color: c })}
               style={{ width: 16, height: 16, borderRadius: '50%', background: c, cursor: 'pointer', border: thought.color === c ? '2px solid #fff' : '2px solid transparent' }} />
           ))}
+          {/* Home button */}
+          <button
+            onClick={() => onSetHome(thought.id === homeThoughtId ? null : thought.id)}
+            title={thought.id === homeThoughtId ? 'Clear home thought' : 'Set as home thought'}
+            style={{
+              marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer',
+              fontSize: 14, opacity: thought.id === homeThoughtId ? 1 : 0.3, padding: '2px 4px',
+              transition: 'opacity 0.15s'
+            }}
+            onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
+            onMouseLeave={e => (e.currentTarget.style.opacity = thought.id === homeThoughtId ? '1' : '0.3')}
+          >
+            🏠
+          </button>
           {/* Pin button */}
           <button
             onClick={() => onTogglePin(thought.id)}
             title={thought.is_pinned ? 'Unpin' : 'Pin'}
             style={{
-              marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer',
+              background: 'none', border: 'none', cursor: 'pointer',
               fontSize: 14, opacity: thought.is_pinned ? 1 : 0.35, padding: '2px 4px',
               transition: 'opacity 0.15s'
             }}
@@ -350,11 +384,13 @@ export function ThoughtPanel({
       </div>
 
       {/* ── Notes ──────────────────────────────────────────────────────── */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', borderBottom: '1px solid rgba(255,255,255,0.07)', minHeight: 80 }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', borderBottom: '1px solid rgba(255,255,255,0.07)', minHeight: 100 }}>
         <div style={sectionLabel}>Notes</div>
+        <NotesToolbar editor={editor} />
         <div style={{ flex: 1, overflow: 'auto', padding: '0 10px 10px' }} onClick={handleEditorClick}>
           <EditorContent editor={editor} />
         </div>
+        <MappedLinksFooter neighborhood={neighborhood} onNavigate={onNavigate} />
       </div>
 
       {/* ── Links ──────────────────────────────────────────────────────── */}

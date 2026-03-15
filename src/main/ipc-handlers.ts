@@ -11,7 +11,8 @@ import {
   dbCreateType, dbGetAllTypes,
   dbTogglePin, dbGetPinnedThoughts,
   dbCreateLinkType, dbGetAllLinkTypes, dbDeleteLinkType,
-  dbGetIndexStatus
+  dbGetIndexStatus,
+  dbGetSetting, dbSetSetting
 } from './database'
 import { queueThought, semanticSearch, getStatus } from './embeddings'
 
@@ -71,6 +72,10 @@ export function registerIpcHandlers(): void {
   // Types
   ipcMain.handle(IPC.CREATE_TYPE, (_, name: string, color: string, icon?: string) => dbCreateType(name, color, icon))
   ipcMain.handle(IPC.GET_ALL_TYPES, () => dbGetAllTypes())
+
+  // Settings
+  ipcMain.handle(IPC.GET_SETTING, (_, key: string) => dbGetSetting(key))
+  ipcMain.handle(IPC.SET_SETTING, (_, key: string, value: string) => dbSetSetting(key, value))
 
   // File system
   ipcMain.handle(IPC.PICK_FILE, async () => {

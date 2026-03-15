@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import type { Thought, Neighborhood, Attachment, Tag, ThoughtType, LinkType, IndexStatus, ThoughtWithScore } from '../../../shared/types'
 
 export interface BrainState {
@@ -9,7 +9,10 @@ export interface BrainState {
   allTypes: ThoughtType[]
   allLinkTypes: LinkType[]
   pinnedThoughts: Thought[]
-  history: string[]   // last 20 navigated IDs, most-recent first
+  history: string[]           // deduplicated recent visits for PastThoughts sidebar
+  historyStack: string[]      // browser-style back/forward stack
+  historyIndex: number        // cursor into historyStack; -1 = empty
+  homeThoughtId: string | null
   loading: boolean
   indexStatus: IndexStatus
 }
@@ -17,8 +20,23 @@ export interface BrainState {
 export function useBrain() {
   const [state, setState] = useState<BrainState>({
     activeId: null, neighborhood: null, allThoughts: [], allTags: [], allTypes: [],
-    allLinkTypes: [], pinnedThoughts: [], history: [], loading: false,
-    indexStatus: { indexed: 0, total: 0, loading: false }
+    allLinkTypes: [], pinnedThoughts: [], history: [],
+    historyStack: [], historyIndex: -1, homeThoughtId: null,
+    loading: false, indexStatus: { indexed: 0, total: 0, loading: false }
+  })
+
+  // Refs avoid stale closure issues in async callbacks
+  const historyStackRef = useRef<string[]>([])
+  const historyIndexRef = useRef<number>(-1)
+  const homeThoughtIdRef = useRef<string | null>(null)
+  const activeIdRef = useRef<string | null>(null)
+
+  // Keep refs in sync after every render
+  useEffect(() => {
+    historyStackRef.current = state.historyStack
+    historyIndexRef.current = state.historyIndex
+    homeThoughtIdRef.current = state.homeThoughtId
+    activeIdRef.current = state.activeId
   })
 
   const refreshAllThoughts = useCallback(async () => {
@@ -51,11 +69,17 @@ export function useBrain() {
     const off = window.brain.onIndexProgress(status => {
       setState(s => ({ ...s, indexStatus: status }))
     })
-    // Fetch initial status
     window.brain.getIndexStatus().then(status => {
       setState(s => ({ ...s, indexStatus: status }))
     })
     return off
+  }, [])
+
+  // Load home thought setting on mount
+  useEffect(() => {
+    window.brain.getSetting('home_thought_id').then(val => {
+      if (val) setState(s => ({ ...s, homeThoughtId: val }))
+    })
   }, [])
 
   useEffect(() => {
@@ -68,10 +92,22 @@ export function useBrain() {
     setState(s => ({ ...s, neighborhood }))
   }, [])
 
+  // Navigate and push to history stack (clears any forward history)
   const navigate = useCallback(async (id: string) => {
+    const stack = historyStackRef.current
+    const index = historyIndexRef.current
+    const truncated = stack.slice(0, index + 1)
+    const newStack = [...truncated, id]
+    const newIndex = newStack.length - 1
+    // Update refs immediately so concurrent calls see latest values
+    historyStackRef.current = newStack
+    historyIndexRef.current = newIndex
+
     setState(s => ({
       ...s,
       loading: true,
+      historyStack: newStack,
+      historyIndex: newIndex,
       history: [id, ...s.history.filter(h => h !== id)].slice(0, 20)
     }))
     try {
@@ -83,82 +119,127 @@ export function useBrain() {
     }
   }, [])
 
+  // Navigate without pushing to history stack (used by goBack / goForward)
+  const navigateSilent = useCallback(async (id: string, newIndex: number, newStack: string[]) => {
+    historyStackRef.current = newStack
+    historyIndexRef.current = newIndex
+    setState(s => ({ ...s, loading: true, historyStack: newStack, historyIndex: newIndex }))
+    try {
+      const neighborhood = await window.brain.getNeighborhood(id)
+      setState(s => ({ ...s, activeId: id, neighborhood, loading: false }))
+    } catch (err) {
+      console.error('navigateSilent error', err)
+      setState(s => ({ ...s, loading: false }))
+    }
+  }, [])
+
+  const goBack = useCallback(() => {
+    const index = historyIndexRef.current
+    const stack = historyStackRef.current
+    if (index <= 0) return
+    navigateSilent(stack[index - 1], index - 1, stack)
+  }, [navigateSilent])
+
+  const goForward = useCallback(() => {
+    const index = historyIndexRef.current
+    const stack = historyStackRef.current
+    if (index >= stack.length - 1) return
+    navigateSilent(stack[index + 1], index + 1, stack)
+  }, [navigateSilent])
+
+  const goHome = useCallback(() => {
+    const homeId = homeThoughtIdRef.current
+    if (homeId) navigate(homeId)
+  }, [navigate])
+
+  const setHomeThought = useCallback(async (id: string | null) => {
+    await window.brain.setSetting('home_thought_id', id ?? '')
+    setState(s => ({ ...s, homeThoughtId: id }))
+  }, [])
+
   // Create one or more thoughts. Titles can be semicolon-separated for batch creation.
   const createThought = useCallback(async (rawTitle: string, linkToActiveAs?: 'child' | 'jump' | 'parent') => {
     const titles = rawTitle.split(';').map(t => t.trim()).filter(Boolean)
     const created: Thought[] = []
+    const currentActiveId = activeIdRef.current
 
     for (const title of titles) {
       const thought = await window.brain.createThought(title)
       created.push(thought)
-      if (state.activeId) {
+      if (currentActiveId) {
         if (linkToActiveAs === 'child') {
-          await window.brain.createLink(state.activeId, thought.id, 'child')
+          await window.brain.createLink(currentActiveId, thought.id, 'child')
         } else if (linkToActiveAs === 'parent') {
-          await window.brain.createLink(thought.id, state.activeId, 'child')
+          await window.brain.createLink(thought.id, currentActiveId, 'child')
         } else if (linkToActiveAs === 'jump') {
-          await window.brain.createLink(state.activeId, thought.id, 'jump')
+          await window.brain.createLink(currentActiveId, thought.id, 'jump')
         }
       }
     }
 
     await refreshAllThoughts()
-    // Navigate to last created thought
     if (created.length > 0) await navigate(created[created.length - 1].id)
     return created
-  }, [state.activeId, refreshAllThoughts, navigate])
+  }, [refreshAllThoughts, navigate])
 
   const updateThought = useCallback(async (id: string, patch: Partial<Omit<Thought, 'id' | 'created_at'>>) => {
     await window.brain.updateThought(id, patch)
     await refreshAllThoughts()
-    if (state.activeId) await refreshNeighborhood(state.activeId)
-  }, [state.activeId, refreshAllThoughts, refreshNeighborhood])
+    const aid = activeIdRef.current
+    if (aid) await refreshNeighborhood(aid)
+  }, [refreshAllThoughts, refreshNeighborhood])
 
   const deleteThought = useCallback(async (id: string) => {
     await window.brain.deleteThought(id)
     await refreshAllThoughts()
     await refreshPinned()
-    if (state.activeId === id) {
+    const aid = activeIdRef.current
+    if (aid === id) {
       const thoughts = await window.brain.getAllThoughts()
       if (thoughts.length > 0) await navigate(thoughts[0].id)
       else setState(s => ({ ...s, activeId: null, neighborhood: null }))
-    } else if (state.activeId) {
-      await refreshNeighborhood(state.activeId)
+    } else if (aid) {
+      await refreshNeighborhood(aid)
     }
-  }, [state.activeId, navigate, refreshAllThoughts, refreshNeighborhood, refreshPinned])
+  }, [navigate, refreshAllThoughts, refreshNeighborhood, refreshPinned])
 
   const createLink = useCallback(async (sourceId: string, targetId: string, type: 'child' | 'jump', label?: string, isOneWay?: number) => {
     await window.brain.createLink(sourceId, targetId, type, label, isOneWay)
-    if (state.activeId) await refreshNeighborhood(state.activeId)
-  }, [state.activeId, refreshNeighborhood])
+    const aid = activeIdRef.current
+    if (aid) await refreshNeighborhood(aid)
+  }, [refreshNeighborhood])
 
   const updateLink = useCallback(async (id: string, patch: { label?: string; is_one_way?: number; color?: string; width?: number; link_type_id?: string | null }) => {
     await window.brain.updateLink(id, patch)
-    if (state.activeId) await refreshNeighborhood(state.activeId)
-  }, [state.activeId, refreshNeighborhood])
+    const aid = activeIdRef.current
+    if (aid) await refreshNeighborhood(aid)
+  }, [refreshNeighborhood])
 
   const deleteLink = useCallback(async (id: string) => {
     await window.brain.deleteLink(id)
-    if (state.activeId) await refreshNeighborhood(state.activeId)
-  }, [state.activeId, refreshNeighborhood])
+    const aid = activeIdRef.current
+    if (aid) await refreshNeighborhood(aid)
+  }, [refreshNeighborhood])
 
   const addAttachment = useCallback(async (type: 'file' | 'url', name: string, filePath: string): Promise<Attachment | null> => {
-    if (!state.activeId) return null
-    const att = await window.brain.addAttachment(state.activeId, type, name, filePath)
-    await refreshNeighborhood(state.activeId)
+    const aid = activeIdRef.current
+    if (!aid) return null
+    const att = await window.brain.addAttachment(aid, type, name, filePath)
+    await refreshNeighborhood(aid)
     return att
-  }, [state.activeId, refreshNeighborhood])
+  }, [refreshNeighborhood])
 
   const deleteAttachment = useCallback(async (id: string) => {
     await window.brain.deleteAttachment(id)
-    if (state.activeId) await refreshNeighborhood(state.activeId)
-  }, [state.activeId, refreshNeighborhood])
+    const aid = activeIdRef.current
+    if (aid) await refreshNeighborhood(aid)
+  }, [refreshNeighborhood])
 
   const pickAndAttachFile = useCallback(async () => {
     const file = await window.brain.pickFile()
-    if (!file || !state.activeId) return
+    if (!file) return
     await addAttachment('file', file.name, file.path)
-  }, [state.activeId, addAttachment])
+  }, [addAttachment])
 
   // Tags
   const createTag = useCallback(async (name: string, color: string): Promise<Tag> => {
@@ -168,16 +249,18 @@ export function useBrain() {
   }, [refreshMeta])
 
   const addTagToThought = useCallback(async (tagId: string) => {
-    if (!state.activeId) return
-    await window.brain.addTagToThought(state.activeId, tagId)
-    await refreshNeighborhood(state.activeId)
-  }, [state.activeId, refreshNeighborhood])
+    const aid = activeIdRef.current
+    if (!aid) return
+    await window.brain.addTagToThought(aid, tagId)
+    await refreshNeighborhood(aid)
+  }, [refreshNeighborhood])
 
   const removeTagFromThought = useCallback(async (tagId: string) => {
-    if (!state.activeId) return
-    await window.brain.removeTagFromThought(state.activeId, tagId)
-    await refreshNeighborhood(state.activeId)
-  }, [state.activeId, refreshNeighborhood])
+    const aid = activeIdRef.current
+    if (!aid) return
+    await window.brain.removeTagFromThought(aid, tagId)
+    await refreshNeighborhood(aid)
+  }, [refreshNeighborhood])
 
   // Types
   const createType = useCallback(async (name: string, color: string, icon?: string): Promise<ThoughtType> => {
@@ -190,10 +273,10 @@ export function useBrain() {
   const togglePin = useCallback(async (id: string) => {
     await window.brain.togglePin(id)
     await refreshPinned()
-    // Refresh neighborhood so pin icon updates
-    if (state.activeId) await refreshNeighborhood(state.activeId)
+    const aid = activeIdRef.current
+    if (aid) await refreshNeighborhood(aid)
     await refreshAllThoughts()
-  }, [state.activeId, refreshPinned, refreshNeighborhood, refreshAllThoughts])
+  }, [refreshPinned, refreshNeighborhood, refreshAllThoughts])
 
   // Link types
   const createLinkType = useCallback(async (name: string, color: string, width: number): Promise<LinkType> => {
@@ -214,7 +297,13 @@ export function useBrain() {
 
   return {
     ...state,
+    canGoBack: state.historyIndex > 0,
+    canGoForward: state.historyIndex < state.historyStack.length - 1,
     navigate,
+    goBack,
+    goForward,
+    goHome,
+    setHomeThought,
     createThought,
     updateThought,
     deleteThought,

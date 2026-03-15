@@ -62,7 +62,11 @@ const brain = {
     const handler = (_: Electron.IpcRendererEvent, status: IndexStatus) => cb(status)
     ipcRenderer.on(IPC.INDEX_PROGRESS, handler)
     return () => ipcRenderer.off(IPC.INDEX_PROGRESS, handler)
-  }
+  },
+
+  // Settings
+  getSetting: (key: string): Promise<string | null> => ipcRenderer.invoke(IPC.GET_SETTING, key),
+  setSetting: (key: string, value: string): Promise<void> => ipcRenderer.invoke(IPC.SET_SETTING, key, value)
 }
 
 contextBridge.exposeInMainWorld('brain', brain)

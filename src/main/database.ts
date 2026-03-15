@@ -85,6 +85,11 @@ function createSchema(): void {
       created_at INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS settings (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL DEFAULT ''
+    );
+
     CREATE TABLE IF NOT EXISTS thought_embeddings (
       thought_id TEXT PRIMARY KEY REFERENCES thoughts(id) ON DELETE CASCADE,
       embedding  BLOB    NOT NULL,
@@ -372,4 +377,15 @@ function cosineSimilarity(a: Float32Array, b: Float32Array): number {
   }
   const denom = Math.sqrt(magA) * Math.sqrt(magB)
   return denom === 0 ? 0 : dot / denom
+}
+
+// ── Settings ───────────────────────────────────────────────────────────────────
+
+export function dbGetSetting(key: string): string | null {
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined
+  return row?.value ?? null
+}
+
+export function dbSetSetting(key: string, value: string): void {
+  db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, value)
 }

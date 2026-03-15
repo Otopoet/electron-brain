@@ -113,5 +113,7 @@ export const IPC = {
   READ_FILE_PREVIEW: 'read-file-preview',
   SEMANTIC_SEARCH: 'semantic-search',
   GET_INDEX_STATUS: 'get-index-status',
-  INDEX_PROGRESS: 'index:progress'
+  INDEX_PROGRESS: 'index:progress',
+  GET_SETTING: 'get-setting',
+  SET_SETTING: 'set-setting'
 } as const
